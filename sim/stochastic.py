@@ -48,6 +48,7 @@ class PathParameters:
     kappa: float = 0.025  # 高周波遮断パラメータ [s]
     stress_drop_bar: float | None = None  # None なら震源種別の既定値
     duration_path_coeff: float = 0.05  # 経路による継続時間の伸び [s/km]
+    max_source_duration: float = 22.0  # 震源継続時間の上限 [s]
 
 
 def geometric_spreading(r_km: np.ndarray, mode: str | None = None) -> np.ndarray:
@@ -108,7 +109,7 @@ class StochasticSimulator:
         model: VelocityModel | None = None,
         path: PathParameters | None = None,
         dt: float = 0.01,
-        max_subfaults: int = 48,
+        max_subfaults: int = 120,
         far_field_factor: float = 4.0,
         seed: int = 20260101,
     ) -> None:
@@ -127,7 +128,12 @@ class StochasticSimulator:
 
     # -- 断層の粗視化 --------------------------------------------------
     def _build_coarse_subfaults(self, max_subfaults: int) -> None:
-        """波形合成用に小断層を粗視化する (モーメントと幾何は保存する)。"""
+        """波形合成用に小断層を粗視化する (モーメントと幾何は保存する)。
+
+        粗視化しすぎると 1 個の小断層が大きくなり、その中心までの距離で
+        近距離の振幅を評価することになって過小評価につながる。海溝型の
+        巨大地震でも小断層が 20-30 km 程度に収まる分割数を既定とする。
+        """
         f = self.fault
         n_l, n_w = f.n_along, f.n_down
         if n_l * n_w <= max_subfaults:
@@ -335,8 +341,11 @@ class StochasticSimulator:
                 spec_s, fc_s = self._amplitude_spectrum(freq, r, m0_i, site, "S")
                 spec_p, fc_p = self._amplitude_spectrum(freq, r, m0_i, site, "P")
 
-                dur_s = 1.0 / fc_s + self.path.duration_path_coeff * r
-                dur_p = 0.5 / fc_p + 0.5 * self.path.duration_path_coeff * r
+                cap = self.path.max_source_duration
+                src_s = min(1.0 / fc_s, cap)
+                src_p = min(0.5 / fc_p, cap * 0.5)
+                dur_s = src_s + self.path.duration_path_coeff * r
+                dur_p = src_p + 0.5 * self.path.duration_path_coeff * r
 
                 # S 波は水平動が主、P 波は上下動が主
                 pk_s = self._packet(arr_s, dur_s, spec_s, time_axis, nfft)

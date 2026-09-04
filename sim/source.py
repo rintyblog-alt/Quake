@@ -22,8 +22,19 @@ INTRASLAB = "intraslab"  # 沈み込むプレート内
 # 司・翠川 (1999) の震源種別補正項
 DEPTH_TERM = {CRUSTAL: 0.00, INTERPLATE: 0.28, INTRASLAB: 0.30}
 
-# 震源種別ごとの標準的な応力降下量 [bar]
-STRESS_DROP = {CRUSTAL: 100.0, INTERPLATE: 60.0, INTRASLAB: 200.0}
+# 震源種別ごとの実効応力降下量 [bar]
+#
+# omega^2 モデルではコーナー周波数だけがこの値に依存する
+# (fc = 4.9e6 * beta * (delta_sigma / M0)^(1/3))。したがってここでの値は
+# 観測から求まる静的応力降下量そのものではなく、合成波形から求めた計測震度が
+# 司・翠川 (1999) の距離減衰式に最も近くなるよう tools/calibrate.py で
+# 較正した実効パラメータである。
+#
+# 海溝型・スラブ内で値が大きいのは、これらの断層面が同じ規模の地殻内地震より
+# 広く、一様すべりを仮定すると観測点近傍のすべりが薄まって過小評価となるため。
+# 実際の大地震では高周波はアスペリティから放射されるが、本モデルはそれを
+# 明示的に置かず、この実効値で吸収している。
+STRESS_DROP = {CRUSTAL: 120.0, INTERPLATE: 700.0, INTRASLAB: 700.0}
 
 
 def moment_from_magnitude(mw: float) -> float:
