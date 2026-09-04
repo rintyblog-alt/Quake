@@ -1,0 +1,12 @@
+{
+  "_comment": "このファイルを manifest.json にリネームし、実際に置いたファイル名だけを残す。書かれていないスロットは合成音になる。",
+  "eew_forecast": "eew_forecast.mp3",
+  "eew_warning": "eew_warning.mp3",
+  "eew_update": "eew_update.mp3",
+  "quake_info": "quake_info.mp3",
+  "tsunami_advisory": "tsunami_advisory.mp3",
+  "tsunami_warning": "tsunami_warning.mp3",
+  "tsunami_major": "tsunami_major.mp3",
+  "countdown_tick": "countdown_tick.mp3",
+  "countdown_final": "countdown_final.mp3"
+}

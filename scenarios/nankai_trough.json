@@ -1,0 +1,7 @@
+{
+ "_comment": "南海トラフ巨大地震 (紀伊半島沖) を想定したプレート間地震",
+ "name": "南海トラフ巨大地震（紀伊半島沖）",
+ "lat": 33.10, "lon": 136.20, "depth_km": 20.0, "magnitude": 8.6,
+ "kind": "interplate", "strike": 250.0, "dip": 12.0, "rake": 90.0,
+ "timeline_seconds": 300.0, "aftershock_days": 3.0, "seed": 20260401
+}

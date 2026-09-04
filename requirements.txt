@@ -1,0 +1,10 @@
+# 数値計算
+numpy>=1.24
+scipy>=1.10
+
+# データ整備 (tools/)
+openpyxl>=3.1      # 気象庁コード表 (xlsx) の読み込み
+matplotlib>=3.7    # 陸域マスクのラスタ化 (point-in-polygon)
+
+# 開発
+pytest>=7.4

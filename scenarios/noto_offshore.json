@@ -1,0 +1,7 @@
+{
+ "_comment": "能登半島沖の逆断層型地殻内地震",
+ "name": "能登半島沖地震",
+ "lat": 37.55, "lon": 137.25, "depth_km": 12.0, "magnitude": 7.6,
+ "kind": "crustal", "strike": 55.0, "dip": 45.0, "rake": 90.0,
+ "timeline_seconds": 240.0, "aftershock_days": 3.0, "seed": 20260601
+}

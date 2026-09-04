@@ -1,0 +1,15 @@
+{
+ "_comment": "首都直下地震 (都心南部直下) を想定した地殻内地震",
+ "name": "首都直下地震（都心南部直下）",
+ "lat": 35.62,
+ "lon": 139.78,
+ "depth_km": 30.0,
+ "magnitude": 7.3,
+ "kind": "intraslab",
+ "strike": 300.0,
+ "dip": 70.0,
+ "rake": 120.0,
+ "timeline_seconds": 240.0,
+ "aftershock_days": 3.0,
+ "seed": 20260301
+}

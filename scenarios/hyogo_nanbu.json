@@ -1,0 +1,7 @@
+{
+ "_comment": "兵庫県南部を震源とする内陸横ずれ断層型地震",
+ "name": "兵庫県南部地震型（内陸直下）",
+ "lat": 34.60, "lon": 135.03, "depth_km": 16.0, "magnitude": 7.3,
+ "kind": "crustal", "strike": 233.0, "dip": 85.0, "rake": 170.0,
+ "timeline_seconds": 200.0, "aftershock_days": 3.0, "seed": 20260701
+}

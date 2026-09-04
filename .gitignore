@@ -1,0 +1,26 @@
+# 音源ファイルは配布しない (web/sounds/README.md を参照)
+web/sounds/*
+!web/sounds/README.md
+!web/sounds/manifest.example.json
+
+# 生データ (再取得可能・サイズが大きい)
+data/raw/japan.geojson
+data/raw/jmacode.zip
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# OS / エディタ
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/
+
+# 単一 HTML へのバンドル (tools/build_bundle.py で生成)
+dist/

@@ -1,0 +1,46 @@
+{
+ "scenarios": [
+  {
+   "file": "hyuganada.json",
+   "name": "日向灘地震",
+   "region": "日向灘",
+   "magnitude": 7.8,
+   "depth": 25.0,
+   "kind": "interplate",
+   "maxIntensity": 4.7,
+   "maxShindo": "5弱",
+   "originTime": "2026-09-05T02:59:11+09:00",
+   "tsunami": "大津波警報",
+   "aftershocks": 400,
+   "reports": 7
+  },
+  {
+   "file": "hyogo_nanbu.json",
+   "name": "兵庫県南部地震型（内陸直下）",
+   "region": "淡路島付近",
+   "magnitude": 7.3,
+   "depth": 16.0,
+   "kind": "crustal",
+   "maxIntensity": 6.4,
+   "maxShindo": "6強",
+   "originTime": "2026-09-05T02:50:41+09:00",
+   "tsunami": "津波警報",
+   "aftershocks": 213,
+   "reports": 6
+  },
+  {
+   "file": "tokyo_bay_north.json",
+   "name": "首都直下地震（都心南部直下）",
+   "region": "東京都２３区",
+   "magnitude": 7.3,
+   "depth": 30.0,
+   "kind": "intraslab",
+   "maxIntensity": 5.9,
+   "maxShindo": "6弱",
+   "originTime": "2026-09-05T02:22:52+09:00",
+   "tsunami": null,
+   "aftershocks": 212,
+   "reports": 4
+  }
+ ]
+}

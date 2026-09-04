@@ -1,0 +1,7 @@
+{
+ "_comment": "日向灘のプレート間地震 (津波を伴う)",
+ "name": "日向灘地震",
+ "lat": 31.90, "lon": 132.00, "depth_km": 25.0, "magnitude": 7.8,
+ "kind": "interplate", "strike": 210.0, "dip": 20.0, "rake": 90.0,
+ "timeline_seconds": 260.0, "aftershock_days": 3.0, "seed": 20260801
+}
