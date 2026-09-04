@@ -675,7 +675,7 @@
     var c = this.readConfig();
     if (!isFinite(c.lat) || !isFinite(c.lon)) return;
     el('cfg-region').value = this.regions.nameAt(c.lat, c.lon);
-    var dim = this.engine.faultDimensions(c.magnitude, c.kind);
+    var dim = this.engine.faultDimensions(c.magnitude, c.kind, c.dip);
     var onLand = this.landmask.isLand(c.lat, c.lon);
     this._preview = { src: c, dim: dim };
     el('config-preview').innerHTML =

@@ -56,21 +56,47 @@
   };
 
   /* ---------------- 断層寸法 ---------------- */
-  Engine.prototype.faultDimensions = function (mag, kind) {
+  /* Python 側の sim/source.py と同じスケーリング則を用いる */
+  Engine.prototype.faultDimensions = function (mag, kind, dip) {
     var m0 = Math.pow(10, 1.5 * mag + 9.1) * 1e7; // dyne*cm
     var area;
     if (kind === 'interplate') area = 1.48e-10 * Math.sqrt(m0);
     else if (m0 <= 7.5e25) area = 2.23e-15 * Math.pow(m0, 2 / 3);
     else area = 4.24e-11 * Math.sqrt(m0);
+
+    // 幅は地震発生層の厚さで頭打ちにする。低角の断層ほど幅を取れる。
     var seismo = kind === 'crustal' ? 20 : 60;
-    var w = Math.min(Math.sqrt(area / 2), seismo);
+    var sinDip = Math.max(Math.sin((dip == null ? 45 : dip) * Math.PI / 180), 0.2);
+    var w = Math.min(Math.sqrt(area / 2), seismo / sinDip);
     return { area: area, length: area / w, width: w };
   };
+
+  /* 断層面の地表投影までの最短距離 Rjb [km]
+   * 観測点を走向方向 u・直交方向 v の座標に移し、断層の矩形に押し込めて測る。 */
+  function joynerBooreDistance(src, dim, lat, lon) {
+    var toRad = Math.PI / 180;
+    var latRef = src.lat * toRad;
+    var east = (lon - src.lon) * toRad * 6371.0088 * Math.cos(latRef);
+    var north = (lat - src.lat) * toRad * 6371.0088;
+
+    var strike = (src.strike || 0) * toRad;
+    // 走向方向の単位ベクトルは (sin, cos)、その右手直交が傾斜下方向の水平投影
+    var u = east * Math.sin(strike) + north * Math.cos(strike);
+    var v = east * Math.cos(strike) - north * Math.sin(strike);
+
+    var halfL = dim.length / 2;
+    var projW = dim.width * Math.cos((src.dip == null ? 45 : src.dip) * Math.PI / 180);
+    var du = Math.max(Math.abs(u) - halfL, 0);
+    // 破壊開始点は幅方向の 0.6 の位置にあるとみなす
+    var v0 = -0.6 * projW, v1 = 0.4 * projW;
+    var dv = v < v0 ? v0 - v : (v > v1 ? v - v1 : 0);
+    return Math.sqrt(du * du + dv * dv);
+  }
 
   /* ---------------- 震度分布 ---------------- */
   Engine.prototype.intensityField = function (src) {
     var st = this.stations, n = st.lat.length;
-    var dim = this.faultDimensions(src.magnitude, src.kind);
+    var dim = this.faultDimensions(src.magnitude, src.kind, src.dip);
     var d = DEPTH_TERM[src.kind] || 0;
     var depth = Math.min(src.depth, 120);
     var c = 0.0028 * Math.pow(10, 0.5 * src.magnitude);
@@ -79,14 +105,12 @@
     var tp = new Float32Array(n);
     var ts = new Float32Array(n);
     var rr = new Float32Array(n);
-    var halfL = dim.length / 2;
 
     for (var i = 0; i < n; i++) {
       var epi = global.Util.haversine(src.lat, src.lon, st.lat[i], st.lon[i]);
-      // 断層の広がりを考慮した等価震源距離
-      var epiEff = Math.max(epi - halfL * 0.5, 0);
-      var r = Math.sqrt(epiEff * epiEff + src.depth * src.depth);
-      r = Math.max(r, 3);
+      // 断層面の広がりを考慮した距離 (地表投影までの最短距離と深さから)
+      var rjb = joynerBooreDistance(src, dim, st.lat[i], st.lon[i]);
+      var r = Math.max(Math.sqrt(rjb * rjb + src.depth * src.depth), 3);
       rr[i] = r;
 
       var logPgv = 0.58 * src.magnitude + 0.0038 * depth + d - 1.29
@@ -225,7 +249,7 @@
     var b = 0.9, p = 1.08, c = 0.02;
     var expected = Math.pow(10, b * mMax - b * mMin);
     var count = Math.min(Math.round(expected * (0.75 + 0.5 * rng())), 300);
-    var dim = this.faultDimensions(src.magnitude, src.kind);
+    var dim = this.faultDimensions(src.magnitude, src.kind, src.dip);
     var scatter = Math.max(dim.width * 0.35, 4);
     var beta = b * Math.LN10;
     var denom = 1 - Math.exp(-beta * (mMax - mMin));
