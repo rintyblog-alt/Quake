@@ -95,6 +95,8 @@ def main() -> int:
             for e in all_entries:
                 if e["file"] == f"{name}.json":
                     entries.append(e)
+    # 一覧は規模の大きい順に揃える (run_scenario.py / rebuild_index.py と同じ)
+    entries.sort(key=lambda e: -e["magnitude"])
     bundle["data/scenarios/index.json"] = {"scenarios": entries}
 
     data_js = "window.__BUNDLED_DATA = " + json.dumps(bundle, ensure_ascii=False, separators=(",", ":")) + ";"

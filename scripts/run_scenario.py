@@ -88,11 +88,12 @@ def main() -> int:
     by_file = {e["file"]: e for e in existing}
     for e in index:
         by_file[e["file"]] = e
+    # 規模の大きい順に並べる (tools/rebuild_index.py と揃える)
+    entries = sorted(by_file.values(), key=lambda e: -e["magnitude"])
     index_path.write_text(
-        json.dumps({"scenarios": list(by_file.values())}, ensure_ascii=False, indent=1),
-        encoding="utf-8",
+        json.dumps({"scenarios": entries}, ensure_ascii=False, indent=1), encoding="utf-8"
     )
-    print(f"一覧を更新: {index_path.relative_to(ROOT)} ({len(by_file)} 件)")
+    print(f"一覧を更新: {index_path.relative_to(ROOT)} ({len(entries)} 件)")
     return 0
 
 
