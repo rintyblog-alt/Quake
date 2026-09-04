@@ -287,7 +287,10 @@
     if (this.landmask.isLand(src.lat, src.lon)) return null;
     if (src.depth > 60 || src.magnitude < 6.0) return null;
 
-    var eff = 0.15 + 0.85 * Math.abs(Math.sin(src.rake * Math.PI / 180));
+    // 海底の上下変位はすべりの傾斜方向成分で決まるため、
+    // 横ずれ断層 (rake が 0 度・180 度付近) はほとんど津波を生じない
+    var sr = Math.sin(src.rake * Math.PI / 180);
+    var eff = 0.08 + 0.92 * sr * sr;
     var zones = [];
     for (var z = 0; z < this.tsunamiZones.length; z++) {
       var zone = this.tsunamiZones[z];

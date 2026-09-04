@@ -123,8 +123,13 @@ def grade_for(height_m: float) -> tuple[str, str, int]:
 
 
 def mechanism_factor(rake_deg: float) -> float:
-    """すべり角による津波励起の効率 (横ずれで小さく、逆断層・正断層で大きい)。"""
-    return 0.15 + 0.85 * abs(math.sin(math.radians(rake_deg)))
+    """すべり角による津波励起の効率。
+
+    海底の上下変位はすべりの傾斜方向成分で決まるため、横ずれ断層 (rake が
+    0 度・180 度付近) はほとんど津波を生じない。sin^2 で効かせることで、
+    逆断層・正断層との差を実際に近づける。
+    """
+    return 0.08 + 0.92 * math.sin(math.radians(rake_deg)) ** 2
 
 
 class TsunamiZones:
