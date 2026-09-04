@@ -85,7 +85,6 @@
     history: [],
     recentResults: [],
     activeRecent: 0,
-    aftershockQueue: [],
     lastFrame: 0,
     firedReports: 0,
     firedTsunami: false,
@@ -220,7 +219,6 @@
     this.t = 0;
     this.firedReports = 0;
     this.firedTsunami = false;
-    this.aftershockQueue = (cur.aftershocks || []).slice();
     if (this.sound) this.sound.cancelSpeech();
 
     el('track').max = String(cur.nt - 1);

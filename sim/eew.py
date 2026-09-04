@@ -115,7 +115,6 @@ class EEWSimulator:
             for h in depths:
                 tt = travel_time(self.model, h, "P")
                 for la in lat_grid:
-                    dist = haversine_array(la, 0.0, self.lat[idx], np.zeros(idx.size))
                     for lo in lon_grid:
                         epi = haversine_array(la, lo, self.lat[idx], self.lon[idx])
                         pred = tt.time(epi)

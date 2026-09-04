@@ -32,7 +32,6 @@
     this.stationRadius = 2.3;
     this.showStations = true;
     this.stationStyle = 'number';   // 'number' = 震度の数字入りの円 / 'color' = 色のみの円
-    this.hoverIndex = -1;
     this.resize();
   }
 
@@ -612,20 +611,6 @@
     this.drawBase();
     this.ctx.clearRect(0, 0, this.cssWidth, this.cssHeight);
     this.ctx.drawImage(this.base, 0, 0, this.cssWidth, this.cssHeight);
-  };
-
-  /* 画面座標から最も近い観測点を探す */
-  MapView.prototype.nearestStation = function (x, y, maxPx) {
-    if (!this.stations) return -1;
-    var best = -1, bestD = (maxPx || 12) * (maxPx || 12);
-    var lat = this.stations.lat, lon = this.stations.lon;
-    for (var i = 0; i < lat.length; i++) {
-      var pt = this.proj.project(lat[i], lon[i]);
-      var dx = pt[0] - x, dy = pt[1] - y;
-      var d = dx * dx + dy * dy;
-      if (d < bestD) { bestD = d; best = i; }
-    }
-    return best;
   };
 
   global.MapView = MapView;

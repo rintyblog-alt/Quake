@@ -33,7 +33,6 @@
     'tsunami_advisory', 'tsunami_warning', 'tsunami_major',
     'countdown_tick', 'countdown_final'
   ];
-  var EXTS = ['mp3', 'ogg', 'wav'];   // manifest.json に書ける拡張子
 
   /* web/sounds/ を走査して使える音源を読み込む */
   Sound.prototype.loadSlots = function () {

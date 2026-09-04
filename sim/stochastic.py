@@ -23,7 +23,7 @@ import numpy as np
 
 from .geo import haversine_array
 from .gmpe import boore_site_amplification
-from .source import FiniteFault, magnitude_from_moment
+from .source import FiniteFault
 from .velocity import VelocityModel, travel_time
 
 # 震源スペクトルの定数

@@ -24,7 +24,7 @@ from pathlib import Path
 
 import numpy as np
 
-from .geo import destination, haversine_array
+from .geo import haversine_array
 from .landmask import LandMask
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "web" / "data"
