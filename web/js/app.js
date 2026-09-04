@@ -647,6 +647,31 @@
     el('clock-text').textContent = U.formatDate(d) + ' ' + U.formatClock(d);
   };
 
+  /* 起動時の既定シナリオ (計算済みデータが無いとき) */
+  var DEFAULT_SOURCE = {
+    lat: 35.62, lon: 139.78, depth: 30, magnitude: 7.3, kind: 'intraslab',
+    strike: 300, dip: 70, rake: 120
+  };
+
+  App.runDefault = function () {
+    var origin = new Date();
+    var res = this.engine.simulate(DEFAULT_SOURCE, {
+      duration: 240, aftershocks: true, tsunami: true, eew: true,
+      aftershockDays: 3, seed: 20260101
+    });
+    this.adoptEngineResult(res, res.source.region + ' ' + U.formatMagnitude(DEFAULT_SOURCE.magnitude), origin);
+    this.play(true);
+    // 設定モードのフォームも既定値に合わせておく
+    el('cfg-lat').value = DEFAULT_SOURCE.lat.toFixed(2);
+    el('cfg-lon').value = DEFAULT_SOURCE.lon.toFixed(2);
+    el('cfg-depth').value = String(DEFAULT_SOURCE.depth);
+    el('cfg-mag').value = DEFAULT_SOURCE.magnitude.toFixed(1);
+    el('cfg-kind').value = DEFAULT_SOURCE.kind;
+    el('cfg-strike').value = String(DEFAULT_SOURCE.strike);
+    el('cfg-dip').value = String(DEFAULT_SOURCE.dip);
+    el('cfg-rake').value = String(DEFAULT_SOURCE.rake);
+  };
+
   /* ---------------- 設定モード ---------------- */
   App.readConfig = function () {
     var timeStr = el('cfg-time').value;
@@ -939,7 +964,8 @@
       if (self.scenarioIndex.length) {
         self.loadScenario(self.scenarioIndex[0]);
       } else {
-        P.toast('設定モードから震源を指定してください');
+        // 計算済みシナリオが無いときは、既定の地震をその場で計算して再生する
+        self.runDefault();
       }
       self.lastFrame = performance.now();
       requestAnimationFrame(function (ts) { self.tick(ts); });
