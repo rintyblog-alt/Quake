@@ -80,9 +80,29 @@ def test_amplitude_decreases_with_distance():
     assert pga[0] > pga[1] > pga[2] > pga[3]
 
 
-def test_far_field_uses_equivalent_point_source():
-    """断層長に比べ十分遠いチャンクでは等価点震源に縮約される。"""
+def test_multiresolution_levels_conserve_moment():
+    """どの解像度でも小断層のモーメントの合計は全体のモーメントに等しい。"""
     fault = FiniteFault(lat=35.0, lon=135.0, depth_km=DEPTH, magnitude=7.5)
     sim = StochasticSimulator(fault, dt=0.02, seed=2)
-    assert sim.n_coarse > 1
-    assert sim.eq_moment == pytest.approx(sim.sub_moment.sum())
+    assert len(sim.levels) >= 2
+    total = fault.sub_moment.sum()
+    for level in sim.levels:
+        assert level["moment"].sum() == pytest.approx(total, rel=1e-9)
+    # 粗い方が小断層は少ない
+    counts = [level["n"] for level in sim.levels]
+    assert counts == sorted(counts, reverse=True)
+    assert counts[-1] == 1
+
+
+def test_distant_chunks_use_coarser_levels():
+    """遠方ほど粗い解像度が選ばれる。"""
+    fault = FiniteFault(lat=33.1, lon=136.2, depth_km=20.0, magnitude=8.6,
+                        strike=250.0, dip=12.0, kind="interplate",
+                        seismogenic_depth_km=60.0)
+    sim = StochasticSimulator(fault, dt=0.02, seed=2)
+    near = sim._level_for_distance(40.0)
+    mid = sim._level_for_distance(300.0)
+    far = sim._level_for_distance(1500.0)
+    assert near == 0
+    assert sim.levels[mid]["n"] <= sim.levels[near]["n"]
+    assert sim.levels[far]["n"] <= sim.levels[mid]["n"]

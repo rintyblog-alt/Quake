@@ -120,31 +120,37 @@ class StochasticSimulator:
         self.far_field_factor = float(far_field_factor)
         self.rng = np.random.default_rng(seed)
 
-        self._build_coarse_subfaults(max_subfaults)
+        # 距離に応じて使い分ける多重解像度の小断層セット
+        self.levels = []
+        for target in (max_subfaults, max(4, max_subfaults // 4), 1):
+            level = self._coarse_subfaults(target)
+            if not self.levels or level["n"] < self.levels[-1]["n"]:
+                self.levels.append(level)
+        self._use_level(0)
 
         # 波形の裾: 震源継続時間 + 経路による伸び + 余裕
         self.stress_drop = self.path.stress_drop_bar or fault.stress_drop
         self.rupture_seconds = float(fault.total_rupture_duration)
 
     # -- 断層の粗視化 --------------------------------------------------
-    def _build_coarse_subfaults(self, max_subfaults: int) -> None:
+    def _coarse_subfaults(self, max_subfaults: int) -> dict:
         """波形合成用に小断層を粗視化する (モーメントと幾何は保存する)。
 
         粗視化しすぎると 1 個の小断層が大きくなり、その中心までの距離で
-        近距離の振幅を評価することになって過小評価につながる。海溝型の
-        巨大地震でも小断層が 20-30 km 程度に収まる分割数を既定とする。
+        近距離の振幅を評価することになって過小評価につながる。一方で遠方では
+        断層の内部構造は分解できないため、粗い分割で十分になる。
         """
         f = self.fault
         n_l, n_w = f.n_along, f.n_down
         if n_l * n_w <= max_subfaults:
             idx_groups = [[i] for i in range(f.n_sub)]
-            self.c_n_along, self.c_n_down = n_l, n_w
+        elif max_subfaults <= 1:
+            idx_groups = [list(range(f.n_sub))]
         else:
             ratio = n_l / n_w
             c_w = max(1, int(round(np.sqrt(max_subfaults / max(ratio, 1e-6)))))
             c_w = min(c_w, n_w)
             c_l = max(1, min(n_l, max_subfaults // c_w))
-            self.c_n_along, self.c_n_down = c_l, c_w
             grid = np.arange(f.n_sub).reshape(n_l, n_w)
             l_edges = np.linspace(0, n_l, c_l + 1).astype(int)
             w_edges = np.linspace(0, n_w, c_w + 1).astype(int)
@@ -166,20 +172,43 @@ class StochasticSimulator:
             delay.append(float(f.sub_delay[g].min()))
             mom.append(wsum)
 
-        self.sub_lat = np.array(lat)
-        self.sub_lon = np.array(lon)
-        self.sub_depth = np.array(dep)
-        self.sub_delay = np.array(delay)
-        self.sub_moment = np.array(mom)
-        self.n_coarse = self.sub_lat.size
+        return {
+            "n": len(idx_groups),
+            "lat": np.array(lat),
+            "lon": np.array(lon),
+            "depth": np.array(dep),
+            "delay": np.array(delay),
+            "moment": np.array(mom),
+        }
 
-        # 遠方用の等価点震源 (モーメント重心)
-        w = self.sub_moment
-        self.eq_lat = float((self.sub_lat * w).sum() / w.sum())
-        self.eq_lon = float((self.sub_lon * w).sum() / w.sum())
-        self.eq_depth = float((self.sub_depth * w).sum() / w.sum())
-        self.eq_delay = float((self.sub_delay * w).sum() / w.sum())
-        self.eq_moment = float(w.sum())
+    def _use_level(self, index: int) -> None:
+        """指定した解像度の小断層セットを現在のものにする。"""
+        level = self.levels[index]
+        self.sub_lat = level["lat"]
+        self.sub_lon = level["lon"]
+        self.sub_depth = level["depth"]
+        self.sub_delay = level["delay"]
+        self.sub_moment = level["moment"]
+        self.n_coarse = level["n"]
+
+    def _level_for_distance(self, r_near: float) -> int:
+        """観測点までの最短距離から、使う小断層の解像度を選ぶ。
+
+        小断層 1 個の代表寸法 sqrt(S/n) が観測点までの距離の 1/3 以下に
+        収まれば、その小断層を点震源とみなしても近距離の振幅を大きく
+        取りこぼさない。この条件を満たす最も粗い解像度を選ぶことで、
+        遠方の観測点の計算量を落とす。
+        """
+        r = max(float(r_near), 1.0)
+        needed = 9.0 * self.fault.area_km2 / (r * r)
+        for i, level in enumerate(self.levels):
+            if level["n"] >= needed:
+                # 条件を満たす中で最も粗いものを使う
+                for j in range(len(self.levels) - 1, i - 1, -1):
+                    if self.levels[j]["n"] >= needed:
+                        return j
+                return i
+        return 0
 
     # -- 到達時刻 ------------------------------------------------------
     def arrivals(self, lat: np.ndarray, lon: np.ndarray) -> dict:
@@ -286,17 +315,18 @@ class StochasticSimulator:
         lon = np.asarray(lon, dtype=float)
         avs30 = np.asarray(avs30, dtype=float)
 
+        self._use_level(0)
         arr = self.arrivals(lat, lon)
         order = np.argsort(arr["r_min"])
 
-        tt = [
-            (travel_time(self.model, float(d), "P"), travel_time(self.model, float(d), "S"))
-            for d in self.sub_depth
+        # 解像度ごとに走時表を用意しておく
+        tt_by_level = [
+            [
+                (travel_time(self.model, float(d), "P"), travel_time(self.model, float(d), "S"))
+                for d in level["depth"]
+            ]
+            for level in self.levels
         ]
-        self.eq_tt = (
-            travel_time(self.model, self.eq_depth, "P"),
-            travel_time(self.model, self.eq_depth, "S"),
-        )
 
         for c0 in range(0, order.size, chunk):
             idx = order[c0 : c0 + chunk]
@@ -314,25 +344,17 @@ class StochasticSimulator:
             site = self._site_amplification(avs30[idx], freq)
             buf = np.zeros((3, idx.size, n))
 
-            # 断層長に比べ十分遠いチャンクでは有限断層の構造が分解できないため、
-            # モーメント重心に置いた等価点震源で置き換える (計算量の削減)
-            r_near = float(arr["r_min"][idx].min())
-            if self.n_coarse > 1 and r_near > self.far_field_factor * self.fault.length_km:
-                sub_ids = [-1]
-            else:
-                sub_ids = list(range(self.n_coarse))
+            # 距離に応じて小断層の解像度を落とす (遠方ほど粗く)
+            li = self._level_for_distance(float(arr["r_min"][idx].min()))
+            level = self.levels[li]
+            tt = tt_by_level[li]
 
-            for i in sub_ids:
-                if i < 0:
-                    s_lat, s_lon = self.eq_lat, self.eq_lon
-                    depth_i, delay_i, m0_i = self.eq_depth, self.eq_delay, self.eq_moment
-                    tt_p, tt_s = self.eq_tt
-                else:
-                    s_lat, s_lon = float(self.sub_lat[i]), float(self.sub_lon[i])
-                    depth_i = float(self.sub_depth[i])
-                    delay_i = float(self.sub_delay[i])
-                    m0_i = float(self.sub_moment[i])
-                    tt_p, tt_s = tt[i]
+            for i in range(level["n"]):
+                s_lat, s_lon = float(level["lat"][i]), float(level["lon"][i])
+                depth_i = float(level["depth"][i])
+                delay_i = float(level["delay"][i])
+                m0_i = float(level["moment"][i])
+                tt_p, tt_s = tt[i]
 
                 epi = haversine_array(s_lat, s_lon, clat, clon)
                 r = np.sqrt(epi**2 + depth_i**2)
@@ -388,5 +410,6 @@ class StochasticSimulator:
 
         self.simulate(lat, lon, avs30, place, chunk=chunk)
         meta = dict(arr)
-        meta.update({"dt": self.dt, "n_samples": n, "n_coarse_subfaults": self.n_coarse})
+        meta.update({"dt": self.dt, "n_samples": n,
+                     "n_coarse_subfaults": self.levels[0]["n"]})
         return out, meta
