@@ -6,14 +6,14 @@
 (function (global) {
   'use strict';
 
-  var SEA_TOP = '#1b3d55';
-  var SEA_BOTTOM = '#0b1a28';
+  var SEA_TOP = '#1d2c46';
+  var SEA_BOTTOM = '#0e1727';
   var LAND_LINE = '#24384a';
   var COAST_LINE = '#4a6a84';
 
   /* 陸は都道府県ごとに落ち着いた色を割り当てる (政治地図のような塗り分け) */
   var LAND_PALETTE = [
-    '#4e8f79', '#9aa356', '#5f8bab', '#a8955f', '#6fa08c', '#8b8fae', '#7d9a5e'
+    '#4f8b74', '#94a05a', '#6a8fae', '#a89566', '#6ea08e', '#8a8bab', '#7d9a62'
   ];
 
   /* 津波の警報種別ごとの海岸線の色 */
@@ -138,12 +138,12 @@
     var ctx = this.ctx, p = this.proj, U = global.Util;
     var lat = this.stations.lat, lon = this.stations.lon;
     var n = lat.length;
-    var radius = U.clamp(5.0 * Math.pow(p.zoom, 0.42), 4.2, 18.0);
-    var showNumber = radius >= 6.5;
+    var radius = U.clamp(7.0 * Math.pow(p.zoom, 0.40), 6.0, 22.0);
+    var showNumber = radius >= 6.0;
     var margin = 26;
 
     var faint = new Path2D();
-    var cell = radius * 2.05;
+    var cell = radius * 1.62;
     var cols = Math.ceil((this.cssWidth + margin * 2) / cell) + 1;
     var best = {};
     var i;
@@ -175,10 +175,10 @@
     ctx.fill(faint);
 
     var order = U.shindoOrder;
-    ctx.lineWidth = Math.max(1.2, radius * 0.15);
+    ctx.lineWidth = Math.max(1.6, radius * 0.17);
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.font = '800 ' + Math.round(radius * 1.24) + 'px "Hiragino Sans", "Noto Sans JP", system-ui, sans-serif';
+    ctx.font = '800 ' + Math.round(radius * 1.18) + 'px "Hiragino Sans", "Noto Sans JP", system-ui, sans-serif';
 
     for (var k = 0; k < order.length; k++) {
       var list = groups[order[k]];
@@ -447,7 +447,7 @@
   MapView.prototype.drawEpicenter = function (lat, lon, pulse) {
     var ctx = this.ctx, p = this.proj;
     var c = p.project(lat, lon);
-    var s = 17;
+    var s = 21;
 
     // 震源のまわりの暗い光輪
     ctx.save();
@@ -477,11 +477,11 @@
     ctx.beginPath();
     ctx.moveTo(c[0] - s, c[1] - s); ctx.lineTo(c[0] + s, c[1] + s);
     ctx.moveTo(c[0] + s, c[1] - s); ctx.lineTo(c[0] - s, c[1] + s);
-    ctx.strokeStyle = '#d92b1f';
-    ctx.lineWidth = 11;
+    ctx.strokeStyle = 'rgba(60, 0, 30, 0.85)';
+    ctx.lineWidth = 13;
     ctx.stroke();
     ctx.strokeStyle = '#ffffff';
-    ctx.lineWidth = 6;
+    ctx.lineWidth = 8;
     ctx.stroke();
     ctx.restore();
   };

@@ -29,6 +29,7 @@ BASE_DATA = [
     "data/traveltime.json",
     "data/tsunami_zones.json",
     "data/landmask.json",
+    "data/subdivisions.json",
 ]
 
 

@@ -228,16 +228,17 @@
     }, true);
 
     // 検知の演出のため、まず震源周辺に寄る
-    this.detectView = this.viewFor(cur, 0.45);
+    this.detectView = this.viewFor(cur, 0.30);
     this.wideView = this.viewFor(cur, 1.0);
     this.applyView(this.detectView);
     this.renderMarks();
   };
 
-  /* 震源の規模に応じた表示範囲 */
+  /* 震源の規模に応じた表示範囲。
+   * 揺れが及ぶ範囲を余裕をもって収める広さと、検知の演出で寄る狭さの 2 段。 */
   App.viewFor = function (cur, scale) {
-    var span = U.clamp(1.3 + (cur.source.magnitude - 5) * 0.95, 1.0, 9) * scale;
-    return { lat: cur.source.lat, lon: cur.source.lon, span: Math.max(span, 0.5) };
+    var span = U.clamp(3.6 + (cur.source.magnitude - 5) * 1.7, 4.0, 12) * scale;
+    return { lat: cur.source.lat, lon: cur.source.lon, span: Math.max(span, 0.6) };
   };
 
   App.applyView = function (v) {

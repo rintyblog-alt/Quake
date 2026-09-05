@@ -261,23 +261,24 @@
   };
 
   /* ---------------- 凡例 ---------------- */
+  /* 参照している地震モニタと同じく、震度 5弱 から 1 までの 5 段で示す */
+  var LEGEND_LEVELS = ['5弱', '4', '3', '2', '1'];
+
   Panels.drawLegend = function () {
     var c = el('legend-bar');
     var ctx = c.getContext('2d');
-    var order = U.shindoOrder;
-    var band = c.height / order.length;
-    for (var i = 0; i < order.length; i++) {
-      // 大きい震度を上に置く
-      ctx.fillStyle = U.shindoColor(order[order.length - 1 - i]);
+    var band = c.height / LEGEND_LEVELS.length;
+    for (var i = 0; i < LEGEND_LEVELS.length; i++) {
+      ctx.fillStyle = U.shindoColor(LEGEND_LEVELS[i]);
       ctx.fillRect(0, i * band, c.width, band + 0.5);
     }
     var ul = el('legend-list');
     ul.innerHTML = '';
-    for (i = order.length - 1; i >= 0; i--) {
+    LEGEND_LEVELS.forEach(function (name) {
       var li = document.createElement('li');
-      li.textContent = '震度' + order[i];
+      li.textContent = '震度' + name;
       ul.appendChild(li);
-    }
+    });
   };
 
   Panels.setLegendStyle = function (style) {
