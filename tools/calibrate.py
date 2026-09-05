@@ -26,7 +26,7 @@ from sim.source import CRUSTAL, INTERPLATE, INTRASLAB, FiniteFault
 from sim.stochastic import PathParameters, StochasticSimulator
 
 MAGNITUDES = (6.0, 6.5, 7.0, 7.5, 8.0, 8.6)
-DISTANCES = (10.0, 20.0, 40.0, 70.0, 120.0, 200.0, 300.0)
+DISTANCES = (10.0, 20.0, 40.0, 70.0, 120.0, 200.0, 300.0, 450.0)
 DEPTH = 10.0
 
 
@@ -53,8 +53,15 @@ def misfit(q0: float, q_eta: float, kappa: float, spreading: str,
     return float(np.sqrt(np.mean(np.concatenate(resid) ** 2)))
 
 
-def stress_misfit(kind: str, stress: float, seed: int = 13) -> float:
-    """指定した震源種別・応力降下量での、震度の距離減衰式との食い違い。"""
+def stress_misfit(kind: str, stress: float, spreading: str = "power",
+                  far_exponent: float | None = None,
+                  seed: int = 13) -> tuple[float, float]:
+    """指定した条件での、震度の距離減衰式との食い違い。
+
+    戻り値は (全距離の RMS 誤差, 200 km 以遠の平均の偏り)。
+    偏りが正なら遠距離で過大に出ていることを示す。
+    """
+    stochastic.SPREADING_MODE = spreading
     depth = 10.0 if kind == CRUSTAL else 30.0
     dip = 90.0 if kind == CRUSTAL else 25.0
     resid = []
@@ -65,7 +72,9 @@ def stress_misfit(kind: str, stress: float, seed: int = 13) -> float:
             seismogenic_depth_km=20.0 if kind == CRUSTAL else 60.0,
         )
         sim = StochasticSimulator(
-            fault, path=PathParameters(stress_drop_bar=stress), dt=0.02, seed=seed
+            fault,
+            path=PathParameters(stress_drop_bar=stress, far_exponent=far_exponent),
+            dt=0.02, seed=seed,
         )
         pts = [destination(35.0, 135.0, 90.0, d) for d in DISTANCES]
         lat = np.array([p[0] for p in pts])
@@ -75,32 +84,36 @@ def stress_misfit(kind: str, stress: float, seed: int = 13) -> float:
         r = np.sqrt(np.array(DISTANCES) ** 2 + depth**2)
         want = np.asarray(intensity_from_pgv(si_midorikawa_pgv(mw, r, depth, kind)))
         resid.append(got - want)
-    return float(np.sqrt(np.mean(np.concatenate(resid) ** 2)))
+    res = np.concatenate(resid)
+    far = np.tile(np.array(DISTANCES) >= 200.0, len(MAGNITUDES))
+    return float(np.sqrt(np.mean(res**2))), float(np.mean(res[far]))
 
 
 def calibrate_stress() -> int:
     """震源種別ごとに応力降下量を較正する。"""
     candidates_by_kind = {
-        CRUSTAL: (90.0, 120.0, 160.0),
+        CRUSTAL: (90.0, 120.0, 160.0, 220.0),
         INTERPLATE: (480.0, 700.0, 1000.0, 1400.0),
         INTRASLAB: (340.0, 480.0, 700.0, 1000.0),
     }
     result = {}
-    for kind in (CRUSTAL, INTERPLATE, INTRASLAB):
-        candidates = candidates_by_kind[kind]
-        print(f"--- {kind} ---", flush=True)
-        best = None
-        for stress in candidates:
-            rms = stress_misfit(kind, stress)
-            tag = f"  応力降下量 {stress:5.0f} bar -> 震度 RMS 誤差 {rms:.3f}"
-            if best is None or rms < best[0]:
-                best = (rms, stress)
-                tag += "  *"
-            print(tag, flush=True)
-        result[kind] = best
+    for far in (0.45, 0.65, 0.85):
+        for kind in (CRUSTAL, INTERPLATE, INTRASLAB):
+            print(f"--- 遠距離の減衰指数 {far} / {kind} ---", flush=True)
+            best = None
+            for stress in candidates_by_kind[kind]:
+                rms, bias = stress_misfit(kind, stress, "power", far)
+                tag = (f"  応力降下量 {stress:5.0f} bar -> RMS {rms:.3f}  "
+                       f"遠距離の偏り {bias:+.2f}")
+                if best is None or rms < best[0]:
+                    best = (rms, stress, bias)
+                    tag += "  *"
+                print(tag, flush=True)
+            result[(far, kind)] = best
     print()
-    for kind, (rms, stress) in result.items():
-        print(f"最良: {kind:11s} 応力降下量 {stress:.0f} bar (震度 RMS 誤差 {rms:.3f})")
+    for (far, kind), (rms, stress, bias) in sorted(result.items()):
+        print(f"最良: 指数 {far} {kind:11s} {stress:5.0f} bar "
+              f"RMS {rms:.3f} 遠距離の偏り {bias:+.2f}")
     return 0
 
 

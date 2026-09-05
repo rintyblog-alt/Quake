@@ -1,4 +1,4 @@
-/* 各種パネルの更新 (緊急地震速報・地震情報・履歴・津波・凡例) */
+/* 各パネルの更新 (緊急地震速報・揺れを検出・津波・地震情報・履歴・凡例) */
 (function (global) {
   'use strict';
 
@@ -7,7 +7,23 @@
 
   var Panels = {};
 
-  /* ---------------- 震度バッジ ---------------- */
+  /* 規模・深さのバーの色 */
+  function magnitudeColor(m) {
+    if (m >= 8.0) return '#e838c8';
+    if (m >= 7.0) return '#e03a2a';
+    if (m >= 6.0) return '#f2941f';
+    if (m >= 5.0) return '#d9e04a';
+    if (m >= 4.0) return '#46c9a0';
+    return '#3f8fd8';
+  }
+  function depthColor(d) {
+    if (d < 20) return '#e03a2a';
+    if (d < 50) return '#f2941f';
+    if (d < 100) return '#d9e04a';
+    if (d < 300) return '#46c9a0';
+    return '#3f8fd8';
+  }
+
   function setBadge(node, intensity) {
     var name = U.shindoClass(intensity);
     node.textContent = intensity <= -2.9 ? '-' : U.shindoShort(name);
@@ -20,77 +36,167 @@
   Panels.showEEW = function (report, originDate) {
     var panel = el('eew-panel');
     panel.classList.remove('hidden');
-    panel.classList.toggle('forecast', report.kind !== '警報');
+    var warn = report.kind === '警報';
+    panel.classList.toggle('forecast', !warn);
 
-    el('eew-grade').textContent = report.kind;
-    el('eew-number').textContent = report.isFinal ? '最終報 #' + report.number : '#' + report.number;
+    el('eew-grade').textContent = (report.isFinal ? '最終 ' : '') + report.kind +
+                                  ' #' + U.pad(report.number);
     el('eew-region').textContent = report.region;
     el('eew-origin').textContent = originDate
       ? U.formatDate(originDate) + ' ' + U.formatClock(originDate) + ' 発生' : '';
 
-    setBadge(el('eew-shindo-value'), report.maxIntensity);
-
-    // 長周期地震動階級は予想震度から概算する
-    var lg = U.lgClassFromPgv(U.pgvFromIntensity ? U.pgvFromIntensity(report.maxIntensity)
-                                                 : Math.pow(10, (report.maxIntensity - 2.68) / 1.72));
-    var lgNode = el('eew-lg-value');
-    lgNode.textContent = lg > 0 ? String(lg) : '-';
-    lgNode.style.background = ['#38465c', '#3fbf6f', '#f5a623', '#f06a1e', '#c01818'][lg];
-    lgNode.style.color = lg === 1 || lg === 2 ? '#0d2415' : '#fff';
+    var box = el('eew-shindo-box');
+    box.classList.toggle('forecast', !warn);
+    el('eew-shindo-value').textContent = report.maxIntensity <= -2.9
+      ? '-' : U.shindoShort(U.shindoClass(report.maxIntensity));
 
     el('eew-magnitude').textContent = Number(report.magnitude).toFixed(1);
+    el('meter-mag-bar').style.background = magnitudeColor(report.magnitude);
     el('eew-depth').textContent = Math.round(report.depth) + 'km';
+    el('meter-depth-bar').style.background = depthColor(report.depth);
 
-    el('eew-message').innerHTML = report.kind === '警報'
+    el('eew-message').innerHTML = warn
       ? '緊急地震速報（警報）発表<br>強い揺れに警戒してください'
       : '緊急地震速報（予報）発表<br>揺れに注意してください';
+  };
 
-    var areas = el('eew-warning-areas');
-    areas.innerHTML = '';
-    if (report.warningRegions && report.warningRegions.length) {
-      report.warningRegions.forEach(function (name) {
-        var s2 = document.createElement('span');
-        s2.textContent = name;
-        areas.appendChild(s2);
-      });
+  Panels.hideEEW = function () { el('eew-panel').classList.add('hidden'); };
+
+  /* ---------------- 揺れを検出 ---------------- */
+  Panels.showDetect = function (maxIntensity, areas) {
+    el('detect-panel').classList.remove('hidden');
+    setBadge(el('detect-value'), maxIntensity);
+    var ul = el('detect-list');
+    ul.innerHTML = '';
+    if (!areas || !areas.length) {
+      var li0 = document.createElement('li');
+      li0.style.color = 'var(--text-faint)';
+      li0.textContent = maxIntensity > -2.9 ? '揺れの広がりを監視中' : '観測中';
+      ul.appendChild(li0);
+      return;
     }
+    areas.slice(0, 6).forEach(function (a) {
+      var li = document.createElement('li');
+      var badge = document.createElement('div');
+      badge.className = 'shindo-badge sm';
+      setBadge(badge, a.intensity);
+      var name = document.createElement('span');
+      name.className = 'area-name';
+      name.textContent = a.name;
+      li.appendChild(badge); li.appendChild(name);
+      ul.appendChild(li);
+    });
   };
 
-  /* 現在のリアルタイム震度の最大値 */
-  Panels.setRealtimeMax = function (intensity) {
-    setBadge(el('eew-rt-value'), intensity);
+  Panels.hideDetect = function () { el('detect-panel').classList.add('hidden'); };
+
+  /* ---------------- 津波 ---------------- */
+  var TSUNAMI_COLORS = ['#4fc3f7', '#f5d020', '#e0231c', '#e838c8'];
+
+  Panels.showTsunami = function (forecast, originDate) {
+    var panel = el('tsunami-panel');
+    if (!forecast) { panel.classList.add('hidden'); return; }
+    panel.className = 'grade-' + forecast.maxLevel;
+    el('tsunami-head').textContent = forecast.maxGrade;
+    el('tsunami-summary').textContent = '対象 ' + forecast.zones.length + ' 予報区';
+
+    // 予想高さの区分ごとにまとめる
+    var groups = [];
+    var byClass = {};
+    forecast.zones.forEach(function (z) {
+      if (!byClass[z.heightClass]) {
+        byClass[z.heightClass] = { cls: z.heightClass, level: z.level, zones: [] };
+        groups.push(byClass[z.heightClass]);
+      }
+      byClass[z.heightClass].zones.push(z);
+    });
+    groups.sort(function (a, b) { return b.level - a.level || b.zones[0].height - a.zones[0].height; });
+
+    var ul = el('tsunami-list');
+    ul.innerHTML = '';
+    groups.slice(0, 5).forEach(function (g) {
+      var color = TSUNAMI_COLORS[Math.min(g.level, 3)];
+      var head = document.createElement('li');
+      head.className = 'tz-group';
+      var hh = document.createElement('span');
+      hh.className = 'tz-height';
+      hh.style.background = color;
+      hh.style.color = g.level === 1 ? '#1a1200' : '#fff';
+      hh.textContent = g.cls;
+      var gg = document.createElement('span');
+      gg.className = 'tz-grade';
+      gg.textContent = g.zones[0].grade;
+      head.appendChild(hh); head.appendChild(gg);
+      ul.appendChild(head);
+
+      g.zones.slice(0, 4).forEach(function (z) {
+        var li = document.createElement('li');
+        li.className = 'tz-zone';
+        li.style.borderLeftColor = color;
+        var n = document.createElement('div');
+        n.className = 'tz-name';
+        n.textContent = z.name;
+        var d = document.createElement('span');
+        d.className = 'tz-detail';
+        d.style.background = color;
+        d.style.color = g.level === 1 ? '#1a1200' : '#fff';
+        var at = originDate ? new Date(originDate.getTime() + z.arrival * 1000) : null;
+        d.textContent = '到達 ' + (at ? U.pad(at.getHours()) + ':' + U.pad(at.getMinutes()) : '-') +
+                        '  ' + z.height.toFixed(1) + 'm';
+        li.appendChild(n); li.appendChild(d);
+        ul.appendChild(li);
+      });
+    });
+    panel.classList.remove('hidden');
   };
 
-  Panels.hideEEW = function () {
-    el('eew-panel').classList.add('hidden');
-    el('eew-countdown').textContent = '';
+  Panels.hideTsunami = function () { el('tsunami-panel').classList.add('hidden'); };
+
+  /* ---------------- 地震情報 (確定) ---------------- */
+  Panels.showFinalInfo = function (info) {
+    el('final-panel').classList.remove('hidden');
+    var cls = U.shindoClass(info.maxIntensity);
+    var bar = el('final-shindo');
+    bar.textContent = '最大震度 ' + U.shindoShort(cls);
+    bar.style.background = U.shindoColor(cls);
+    bar.style.color = U.shindoTextColor(cls);
+
+    el('final-when').textContent = info.time
+      ? (info.time.getMonth() + 1) + '月' + info.time.getDate() + '日 ' +
+        U.pad(info.time.getHours()) + '時' + U.pad(info.time.getMinutes()) + '分ごろ' : '';
+    el('final-region').textContent = info.region;
+    el('final-magnitude').textContent = Number(info.magnitude).toFixed(1);
+    el('final-mag-bar').style.background = magnitudeColor(info.magnitude);
+    el('final-depth').textContent = Math.round(info.depth) + 'km';
+    el('final-depth-bar').style.background = depthColor(info.depth);
+
+    var ul = el('final-areas');
+    ul.innerHTML = '';
+    (info.areas || []).slice(0, 8).forEach(function (a) {
+      var li = document.createElement('li');
+      var badge = document.createElement('div');
+      badge.className = 'shindo-badge sm';
+      setBadge(badge, a.intensity);
+      var name = document.createElement('span');
+      name.className = 'area-name';
+      name.textContent = a.name;
+      li.appendChild(badge); li.appendChild(name);
+      ul.appendChild(li);
+    });
   };
 
-  Panels.setCountdown = function (text) { el('eew-countdown').textContent = text || ''; };
+  Panels.hideFinalInfo = function () { el('final-panel').classList.add('hidden'); };
 
-  /* ---------------- 地震情報 (現在) ---------------- */
-  Panels.showQuakeInfo = function (info) {
-    setBadge(el('cur-shindo'), info.maxIntensity);
-    el('cur-region').textContent = info.region;
-    el('cur-time').textContent = info.time ? U.formatHM(info.time) + ' 頃発生' : '';
-    el('cur-maxshindo').textContent = '震度 ' + U.shindoClass(info.maxIntensity);
-    el('cur-region2').textContent = info.region;
-    el('cur-magnitude').textContent = U.formatMagnitude(info.magnitude);
-    el('cur-depth').textContent = U.formatDepth(info.depth);
-  };
-
-  /* ---------------- 直近 5 件 (再生可能) ---------------- */
+  /* ---------------- 直近の地震 / 履歴 ---------------- */
   Panels.renderRecent = function (list, activeIndex, onPlay) {
     var ul = el('recent-list');
     ul.innerHTML = '';
     list.slice(0, 5).forEach(function (q, i) {
       var li = document.createElement('li');
       if (i === activeIndex) li.classList.add('active');
-
       var badge = document.createElement('div');
       badge.className = 'shindo-badge sm';
       setBadge(badge, q.maxIntensity);
-
       var main = document.createElement('div');
       main.className = 'rl-main';
       var r = document.createElement('div');
@@ -98,41 +204,33 @@
       r.textContent = q.region;
       var sub = document.createElement('div');
       sub.className = 'rl-sub';
-      sub.textContent = U.formatMagnitude(q.magnitude) + ' / ' + U.formatDepth(q.depth) +
+      sub.textContent = U.formatMagnitude(q.magnitude) + ' / ' + Math.round(q.depth) + 'km' +
                         (q.time ? ' / ' + U.formatHM(q.time) : '');
       main.appendChild(r); main.appendChild(sub);
-
       var play = document.createElement('div');
       play.className = 'rl-play';
       play.textContent = '▶';
-
       li.appendChild(badge); li.appendChild(main); li.appendChild(play);
       li.addEventListener('click', function () { onPlay(i, q); });
       ul.appendChild(li);
     });
     if (!list.length) {
       var empty = document.createElement('li');
-      empty.style.color = 'var(--text-faint)';
-      empty.style.gridTemplateColumns = '1fr';
+      empty.className = 'empty';
       empty.textContent = 'まだ地震はありません';
       ul.appendChild(empty);
     }
   };
 
-  /* ---------------- 履歴 15 件 ---------------- */
-  /* 行全体を最大震度の色で塗り、右端に大きな震度の数字を置く */
   Panels.renderHistory = function (list) {
     var ul = el('history-list');
     ul.innerHTML = '';
     list.slice(0, 15).forEach(function (q) {
       var cls = U.shindoClass(q.maxIntensity);
-      var color = U.shindoColor(cls);
-      var fg = U.shindoTextColor(cls);
-
       var li = document.createElement('li');
       li.className = 'hist-row';
-      li.style.background = color;
-      li.style.color = fg;
+      li.style.background = U.shindoColor(cls);
+      li.style.color = U.shindoTextColor(cls);
 
       var main = document.createElement('div');
       main.className = 'hist-main';
@@ -151,8 +249,6 @@
       var big = document.createElement('div');
       big.className = 'hist-shindo';
       big.textContent = U.shindoShort(cls);
-      big.style.color = fg;
-
       li.appendChild(main); li.appendChild(big);
       ul.appendChild(li);
     });
@@ -164,114 +260,29 @@
     }
   };
 
-  /* ---------------- 地震情報 (確定) ---------------- */
-  /* 揺れが収まったあとに出す、観測された震度の確定表示 */
-  Panels.showFinalInfo = function (info) {
-    var panel = el('final-panel');
-    panel.classList.remove('hidden');
-    var cls = U.shindoClass(info.maxIntensity);
-
-    var bar = el('final-shindo');
-    bar.textContent = '最大震度 ' + U.shindoShort(cls);
-    bar.style.background = U.shindoColor(cls);
-    bar.style.color = U.shindoTextColor(cls);
-
-    el('final-when').textContent = info.time
-      ? (info.time.getMonth() + 1) + '月' + info.time.getDate() + '日 ' +
-        U.pad(info.time.getHours()) + '時' + U.pad(info.time.getMinutes()) + '分ごろ'
-      : '';
-    el('final-region').textContent = info.region;
-    el('final-magnitude').textContent = Number(info.magnitude).toFixed(1);
-    el('final-depth').textContent = Math.round(info.depth) + 'km';
-
-    var banner = el('tsunami-banner');
-    banner.classList.remove('hidden');
-    if (info.tsunami) {
-      banner.textContent = 'この地震により' + info.tsunami.maxGrade + 'が発表されています';
-      banner.className = 'tsunami-banner alert';
-    } else {
-      banner.textContent = 'この地震による津波の心配はありません';
-      banner.className = 'tsunami-banner';
-    }
-  };
-
-  Panels.hideFinalInfo = function () {
-    el('final-panel').classList.add('hidden');
-    el('tsunami-banner').classList.add('hidden');
-  };
-
-  /* ---------------- 津波 ---------------- */
-  Panels.showTsunami = function (forecast) {
-    var panel = el('tsunami-panel');
-    if (!forecast) { panel.classList.add('hidden'); return; }
-    panel.classList.remove('hidden');
-    panel.className = 'panel grade-' + forecast.maxLevel;
-
-    el('tsunami-head').textContent = forecast.maxGrade;
-    var ul = el('tsunami-list');
-    ul.innerHTML = '';
-    forecast.zones.slice(0, 14).forEach(function (z) {
-      var li = document.createElement('li');
-      li.className = 'tz-' + z.level;
-      var n = document.createElement('span'); n.className = 'tz-name'; n.textContent = z.name;
-      var h = document.createElement('span'); h.className = 'tz-h'; h.textContent = z.heightClass;
-      var t = document.createElement('span'); t.className = 'tz-t';
-      t.textContent = '約' + Math.round(z.arrival / 60) + '分';
-      li.appendChild(n); li.appendChild(h); li.appendChild(t);
-      ul.appendChild(li);
-    });
-  };
-
-  Panels.hideTsunami = function () { el('tsunami-panel').classList.add('hidden'); };
-
-  /* ---------------- 地図の色 (凡例) ---------------- */
+  /* ---------------- 凡例 ---------------- */
   Panels.drawLegend = function () {
-    var ul = el('legend-list');
-    ul.innerHTML = '';
-    // 大きい震度を上に並べる
-    U.shindoOrder.slice().reverse().forEach(function (name) {
-      var li = document.createElement('li');
-      var sw = document.createElement('span');
-      sw.className = 'legend-sw';
-      sw.style.background = U.shindoColor(name);
-      sw.style.color = U.shindoTextColor(name);
-      sw.textContent = U.shindoShort(name);
-      var label = document.createElement('span');
-      label.className = 'legend-name';
-      label.textContent = '震度' + name;
-      li.appendChild(sw); li.appendChild(label);
-      ul.appendChild(li);
-    });
-  };
-
-  /* 観測点の表示スタイルに合わせて凡例を切り替える */
-  Panels.setLegendStyle = function (style) {
-    var list = el('legend-list'), bar = el('legend-bar'), ticks = el('legend-ticks');
-    var isColor = style === 'color';
-    list.classList.toggle('hidden', isColor);
-    bar.classList.toggle('hidden', !isColor);
-    ticks.classList.toggle('hidden', !isColor);
-    el('style-number').classList.toggle('active', !isColor);
-    el('style-color').classList.toggle('active', isColor);
-    if (isColor) Panels.drawLegendBar();
-  };
-
-  /* リアルタイム震度の連続配色バー */
-  Panels.drawLegendBar = function () {
     var c = el('legend-bar');
     var ctx = c.getContext('2d');
-    var w = c.width, h = c.height;
-    var img = ctx.createImageData(w, h);
-    for (var x = 0; x < w; x++) {
-      var v = -1 + (x / (w - 1)) * 8;
-      var rgb = U.realtimeRGB(v);
-      for (var y = 0; y < h; y++) {
-        var o = (y * w + x) * 4;
-        img.data[o] = rgb[0]; img.data[o + 1] = rgb[1];
-        img.data[o + 2] = rgb[2]; img.data[o + 3] = 255;
-      }
+    var order = U.shindoOrder;
+    var band = c.height / order.length;
+    for (var i = 0; i < order.length; i++) {
+      // 大きい震度を上に置く
+      ctx.fillStyle = U.shindoColor(order[order.length - 1 - i]);
+      ctx.fillRect(0, i * band, c.width, band + 0.5);
     }
-    ctx.putImageData(img, 0, 0);
+    var ul = el('legend-list');
+    ul.innerHTML = '';
+    for (i = order.length - 1; i >= 0; i--) {
+      var li = document.createElement('li');
+      li.textContent = '震度' + order[i];
+      ul.appendChild(li);
+    }
+  };
+
+  Panels.setLegendStyle = function (style) {
+    el('style-number').classList.toggle('active', style !== 'color');
+    el('style-color').classList.toggle('active', style === 'color');
   };
 
   /* ---------------- トースト ---------------- */

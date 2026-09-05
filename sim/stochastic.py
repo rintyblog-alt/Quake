@@ -35,8 +35,15 @@ PARTITION = 1.0 / np.sqrt(2.0)  # 水平 2 成分への分配
 # 幾何減衰の折れ点 [km]
 R1, R2 = 70.0, 130.0
 
-# 幾何減衰の型: "trilinear" (三折れ線) または "inverse_r" (1/R 一様)
-SPREADING_MODE = "trilinear"
+# 幾何減衰の型
+#   "power"     R1 まで 1/R、以遠は (R1/R)^FAR_EXPONENT (既定)
+#   "trilinear" Atkinson & Boore (1995) の三折れ線
+#   "inverse_r" 全距離で 1/R
+SPREADING_MODE = "power"
+
+# "power" のときの遠距離の減衰指数。1.0 で 1/R、0 で減衰しない。
+# 三折れ線は遠距離で過大、1/R は過小になるため、その中間を較正で決める。
+FAR_EXPONENT = 0.65
 
 
 @dataclass
@@ -48,18 +55,26 @@ class PathParameters:
     kappa: float = 0.025  # 高周波遮断パラメータ [s]
     stress_drop_bar: float | None = None  # None なら震源種別の既定値
     duration_path_coeff: float = 0.05  # 経路による継続時間の伸び [s/km]
+    far_exponent: float | None = None  # 遠距離の幾何減衰の指数 (None で既定値)
     max_source_duration: float = 22.0  # 震源継続時間の上限 [s]
 
 
-def geometric_spreading(r_km: np.ndarray, mode: str | None = None) -> np.ndarray:
+def geometric_spreading(
+    r_km: np.ndarray, mode: str | None = None, far_exponent: float | None = None
+) -> np.ndarray:
     """幾何減衰。
 
-    mode="trilinear" は Atkinson & Boore (1995) の三折れ線、
-    mode="inverse_r" は全距離で 1/R とする。
+    "power"     R1 まで 1/R、以遠は (R1/R)^far_exponent
+    "trilinear" Atkinson & Boore (1995) の三折れ線
+    "inverse_r" 全距離で 1/R
     """
     r = np.maximum(np.asarray(r_km, dtype=float), 1.0)
-    if (mode or SPREADING_MODE) == "inverse_r":
+    m = mode or SPREADING_MODE
+    if m == "inverse_r":
         return 1.0 / r
+    if m == "power":
+        e = FAR_EXPONENT if far_exponent is None else far_exponent
+        return np.where(r <= R1, 1.0 / r, (1.0 / R1) * (R1 / r) ** e)
     g = np.where(r <= R1, 1.0 / r, 0.0)
     mid = (r > R1) & (r <= R2)
     g = np.where(mid, 1.0 / R1, g)
@@ -246,7 +261,7 @@ class StochasticSimulator:
         r = np.asarray(r_km, dtype=float)[:, None]
         const = rad * PARTITION * FREE_SURFACE / (4.0 * np.pi * rho * v**3) * 1e-20
         source = brune_spectrum(freq, m0_dyne_cm, fc)[None, :]
-        geom = geometric_spreading(r)
+        geom = geometric_spreading(r, far_exponent=self.path.far_exponent)
         atten = anelastic_attenuation(freq, r, v, self.path.q0, self.path.q_eta)
         high_cut = np.exp(-np.pi * self.path.kappa * freq)[None, :]
 

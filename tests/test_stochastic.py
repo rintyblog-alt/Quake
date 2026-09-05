@@ -29,12 +29,27 @@ def run(mw, seed=3):
     return acc, meta
 
 
-def test_geometric_spreading_is_trilinear():
-    r = np.array([10.0, 70.0, 100.0, 300.0])
+def test_geometric_spreading_power_law():
+    """既定の "power" は 70 km まで 1/R、以遠は緩やかな冪で減る。"""
+    r = np.array([10.0, 70.0, 140.0, 300.0])
     g = geometric_spreading(r)
     assert g[0] == pytest.approx(0.1)
-    assert g[1] == pytest.approx(g[2], rel=1e-9)   # 70-130 km は一定
+    assert g[1] == pytest.approx(1.0 / 70.0)
+    assert np.all(np.diff(g) < 0)                     # 単調に減る
+    # 70 km 以遠は 1/R より緩やか、かつ減衰はする
+    assert g[3] > geometric_spreading(np.array([300.0]), mode="inverse_r")[0]
     assert g[3] < g[2]
+
+
+def test_geometric_spreading_modes():
+    r = np.array([10.0, 70.0, 100.0, 300.0])
+    tri = geometric_spreading(r, mode="trilinear")
+    assert tri[1] == pytest.approx(tri[2], rel=1e-9)  # 70-130 km は一定
+    inv = geometric_spreading(r, mode="inverse_r")
+    assert inv == pytest.approx(1.0 / r)
+    # 遠距離は 三折れ線 > power > 1/R の順に大きい
+    pw = geometric_spreading(r, mode="power", far_exponent=0.65)
+    assert tri[3] > pw[3] > inv[3]
 
 
 def test_anelastic_attenuation_bounds():

@@ -89,11 +89,16 @@ def load_code_tables() -> dict:
 
     # 細分区域 -> 観測点名 の対応
     station_area: dict[str, str] = {}
+    station_area_code: dict[str, str] = {}
     subareas: set[str] = set()
+    subarea_names: dict[str, str] = {}
     for r in list(wb["24"].iter_rows(values_only=True))[3:]:
         if r[1] and r[7]:
             subareas.add(str(r[1]))
             station_area[str(r[7])] = str(r[1])
+            if r[0]:
+                station_area_code[str(r[7])] = str(r[0])
+                subarea_names[str(r[0])] = str(r[1])
 
     tsunami = []
     for r in list(wb["31"].iter_rows(values_only=True))[3:]:
@@ -106,6 +111,8 @@ def load_code_tables() -> dict:
     return {
         "epicenter": epicenter,
         "station_area": station_area,
+        "station_area_code": station_area_code,
+        "subarea_names": subarea_names,
         "subareas": subareas,
         "tsunami": tsunami,
     }
@@ -139,8 +146,10 @@ def build_stations(codes: dict) -> dict:
     name2code = {v: k for k, v in codes["epicenter"].items()}
 
     lat, lon, avs, arv, region, names, pref, geomorph = [], [], [], [], [], [], [], []
+    subarea: list[str] = []
     missing_avs = 0
     missing_region = 0
+    missing_subarea = 0
 
     for st in stations:
         la, lo = float(st["lat"]), float(st["lon"])
@@ -157,6 +166,10 @@ def build_stations(codes: dict) -> dict:
         code = name2code.get(epi_name, "")
         if not code:
             missing_region += 1
+        sub_code = codes["station_area_code"].get(st["name"], "")
+        if not sub_code:
+            missing_subarea += 1
+        subarea.append(sub_code)
 
         lat.append(round(la, 4))
         lon.append(round(lo, 4))
@@ -169,10 +182,13 @@ def build_stations(codes: dict) -> dict:
 
     print(
         f"  観測点 {len(stations)} 点 / AVS30 欠測 {missing_avs} 点 "
-        f"/ 震央地名未割当 {missing_region} 点"
+        f"/ 震央地名未割当 {missing_region} 点 / 細分区域未割当 {missing_subarea} 点"
     )
+    used = sorted({c for c in subarea if c})
     return {
         "count": len(stations),
+        "subarea": subarea,
+        "subareaNames": {c: codes["subarea_names"][c] for c in used},
         "lat": lat,
         "lon": lon,
         "avs30": avs,

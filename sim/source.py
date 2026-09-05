@@ -34,7 +34,7 @@ DEPTH_TERM = {CRUSTAL: 0.00, INTERPLATE: 0.28, INTRASLAB: 0.30}
 # 広く、一様すべりを仮定すると観測点近傍のすべりが薄まって過小評価となるため。
 # 実際の大地震では高周波はアスペリティから放射されるが、本モデルはそれを
 # 明示的に置かず、この実効値で吸収している。
-STRESS_DROP = {CRUSTAL: 120.0, INTERPLATE: 700.0, INTRASLAB: 700.0}
+STRESS_DROP = {CRUSTAL: 160.0, INTERPLATE: 1000.0, INTRASLAB: 700.0}
 
 
 def moment_from_magnitude(mw: float) -> float:

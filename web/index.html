@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="theme-color" content="#16233c">
+<meta name="theme-color" content="#0d1a2b">
 <title>seismic-sim 地震モニタ</title>
 <link rel="stylesheet" href="css/style.css">
 </head>
@@ -11,143 +11,119 @@
 <div id="app">
   <canvas id="map"></canvas>
 
-  <!-- 左の縦アイコン列 -->
+  <!-- ================= 左パネル ================= -->
+  <aside id="side">
+    <!-- 緊急地震速報 -->
+    <section id="eew-panel" class="hidden">
+      <header class="eew-head">
+        <span class="eew-title">緊急地震速報</span>
+        <span id="eew-grade" class="eew-grade">警報 #1</span>
+      </header>
+
+      <div class="eew-hypo">
+        <span id="eew-region">-</span><span class="suffix">で地震</span>
+      </div>
+      <div id="eew-origin" class="eew-origin">----/--/-- --:--:-- 発生</div>
+
+      <div id="eew-shindo-box" class="shindo-box">
+        <div class="shindo-box-label"><b>推定</b><span>最大震度</span></div>
+        <div id="eew-shindo-value" class="shindo-box-value">-</div>
+      </div>
+
+      <div class="meter" id="meter-mag">
+        <span class="meter-name">マグニチュード</span>
+        <span id="eew-magnitude" class="meter-value">-</span>
+        <i id="meter-mag-bar" class="meter-bar"></i>
+      </div>
+      <div class="meter" id="meter-depth">
+        <span class="meter-name">深さ</span>
+        <span id="eew-depth" class="meter-value">-</span>
+        <i id="meter-depth-bar" class="meter-bar"></i>
+      </div>
+
+      <p id="eew-message" class="eew-message">緊急地震速報（警報）発表<br>強い揺れに警戒してください</p>
+    </section>
+
+    <!-- 揺れを検出 -->
+    <section id="detect-panel" class="hidden">
+      <header class="section-bar">揺れを検出</header>
+      <div class="detect-top">
+        <span class="detect-label">リアルタイム<br><b>強震最大震度</b></span>
+        <div id="detect-value" class="shindo-badge lg">-</div>
+      </div>
+      <ul id="detect-list" class="detect-list"></ul>
+    </section>
+
+    <!-- 津波情報 -->
+    <section id="tsunami-panel" class="hidden">
+      <header id="tsunami-head" class="tsunami-head">津波情報</header>
+      <div id="tsunami-summary" class="tsunami-summary"></div>
+      <ul id="tsunami-list" class="tsunami-list"></ul>
+    </section>
+
+    <!-- 地震情報 (確定) -->
+    <section id="final-panel" class="hidden">
+      <header id="final-shindo" class="final-shindo">最大震度 -</header>
+      <div id="final-when" class="final-when"></div>
+      <div class="final-region-row">
+        <span id="final-region" class="final-region">-</span><span class="suffix">で地震</span>
+      </div>
+      <div class="meter">
+        <span class="meter-name">マグニチュード</span>
+        <span id="final-magnitude" class="meter-value">-</span>
+        <i id="final-mag-bar" class="meter-bar"></i>
+      </div>
+      <div class="meter">
+        <span class="meter-name">深さ</span>
+        <span id="final-depth" class="meter-value">-</span>
+        <i id="final-depth-bar" class="meter-bar"></i>
+      </div>
+      <ul id="final-areas" class="final-areas"></ul>
+    </section>
+
+    <!-- 地震情報・履歴 -->
+    <section id="info-panel">
+      <div class="info-tabs">
+        <button id="tab-current" class="info-tab active">直近の地震</button>
+        <button id="tab-history" class="info-tab">履歴</button>
+      </div>
+      <div id="pane-current" class="info-pane">
+        <ul id="recent-list" class="recent-list"></ul>
+      </div>
+      <div id="pane-history" class="info-pane hidden">
+        <ul id="history-list" class="history-list"></ul>
+      </div>
+    </section>
+  </aside>
+
+  <!-- ================= アイコン列 ================= -->
   <nav id="railbar" aria-label="表示切替">
     <button id="rail-info" class="rail-btn active" title="地震情報">ⓘ</button>
-    <button id="rail-eew" class="rail-btn active" title="緊急地震速報">⚠</button>
-    <button id="rail-tsunami" class="rail-btn active" title="津波情報">🌊</button>
-    <button id="rail-sound" class="rail-btn active" title="音声">🔔</button>
-    <button id="rail-close" class="rail-btn" title="パネルを閉じる">✕</button>
+    <button id="rail-wave" class="rail-btn active" title="観測波形">
+      <span class="rail-glyph">〜</span><i class="rail-dot"></i>
+    </button>
+    <button id="rail-tsunami" class="rail-btn active" title="津波情報">⚠</button>
+    <button id="rail-config" class="rail-btn" title="設定">⚙</button>
   </nav>
 
-  <!-- 左: 緊急地震速報パネル -->
-  <section id="eew-panel" class="hidden" aria-live="polite">
-    <div class="eew-head">
-      <span id="eew-kind" class="tag tag-eew">緊急地震速報</span>
-      <span id="eew-grade" class="tag tag-grade">警報</span>
-      <span id="eew-number" class="eew-number">#1</span>
-    </div>
-
-    <div class="eew-hypo">
-      <span id="eew-region">-</span><span class="eew-hypo-suffix">で地震</span>
-    </div>
-    <div id="eew-origin" class="eew-origin">----/--/-- --:--:-- 発生</div>
-
-    <div class="eew-row">
-      <div class="eew-row-label"><span class="est">推定</span><span class="lbl">最大震度</span></div>
-      <div id="eew-shindo-value" class="shindo-badge">-</div>
-    </div>
-
-    <div class="eew-row sub">
-      <div class="eew-row-label"><span class="est">推定</span><span class="lbl">最大長周期<br>地震動階級</span></div>
-      <div id="eew-lg-value" class="lg-badge">-</div>
-    </div>
-
-    <div class="eew-meter" id="meter-mag">
-      <span class="meter-name">マグニチュード</span>
-      <span id="eew-magnitude" class="meter-value">-</span>
-    </div>
-    <div class="eew-meter" id="meter-depth">
-      <span class="meter-name">深さ</span>
-      <span id="eew-depth" class="meter-value">-</span>
-    </div>
-
-    <div id="eew-message" class="eew-message">緊急地震速報（警報）発表<br>強い揺れに警戒してください</div>
-
-    <div class="eew-detect">
-      <div class="detect-title">揺れを検出</div>
-      <div class="detect-row">
-        <div class="detect-label">リアルタイム<br><small>震度最大値</small></div>
-        <div id="eew-rt-value" class="shindo-badge sm">-</div>
-      </div>
-      <div id="eew-countdown" class="detect-countdown"></div>
-    </div>
-
-    <div id="eew-warning-areas" class="eew-areas"></div>
-  </section>
-
-  <!-- 左: 観測波形 (ドラムロール) -->
-  <section id="wave-strip" class="hidden">
-    <canvas id="wave-canvas"></canvas>
-    <div class="wave-scale">2gal/row</div>
-  </section>
-
-  <!-- 右上: 津波の有無 -->
-  <div id="tsunami-banner" class="tsunami-banner hidden"></div>
-
-  <!-- 左下: 地震情報 (確定) -->
-  <section id="final-panel" class="hidden">
-    <div id="final-shindo" class="final-shindo">最大震度 -</div>
-    <div id="final-when" class="final-when"></div>
-    <div class="final-region-row">
-      <span id="final-region" class="final-region">-</span>
-      <span class="final-suffix">で地震がありました</span>
-    </div>
-    <div class="final-facts">
-      <div class="final-fact"><span class="ff-name">マグニチュード</span><span id="final-magnitude" class="ff-value">-</span></div>
-      <div class="final-fact"><span class="ff-name">深さ</span><span id="final-depth" class="ff-value">-</span></div>
-    </div>
-  </section>
-
-  <!-- 上部中央: 更新時刻 -->
+  <!-- ================= 地図上の表示 ================= -->
   <div id="clock-pill" class="clock-pill">
-    <span id="clock-text">----/--/-- --:--:--</span>
-    <span class="clock-suffix">更新</span>
+    <span id="clock-text">----/--/-- --:--:--</span><span class="suffix">更新</span>
   </div>
 
-  <!-- 上部右: モード切替 -->
+  <div id="drill-badge" class="drill-badge">訓練</div>
+
   <nav class="mode-switch" role="tablist" aria-label="モード切替">
-    <button id="mode-visual" class="mode-btn active" role="tab" aria-selected="true">視覚モード</button>
-    <button id="mode-config" class="mode-btn" role="tab" aria-selected="false">設定モード</button>
+    <button id="mode-visual" class="mode-btn active" role="tab" aria-selected="true">視覚</button>
+    <button id="mode-config" class="mode-btn" role="tab" aria-selected="false">設定</button>
   </nav>
 
-  <!-- 左下: ズーム操作 -->
   <div id="zoom-ctl" class="zoom-ctl">
     <button id="zoom-in" title="拡大">＋</button>
     <button id="zoom-out" title="縮小">－</button>
-    <button id="zoom-fit" title="全体表示">⤢</button>
+    <button id="zoom-fit" title="全体表示">⛶</button>
   </div>
 
-  <!-- 右: 津波情報 -->
-  <section id="tsunami-panel" class="hidden">
-    <div id="tsunami-head" class="tsunami-head">津波情報</div>
-    <ul id="tsunami-list" class="tsunami-list"></ul>
-  </section>
-
-  <!-- 右: 地震情報 -->
-  <aside id="info-panel">
-    <div class="info-tabs">
-      <button id="tab-current" class="info-tab active">地震情報</button>
-      <button id="tab-history" class="info-tab">履歴</button>
-    </div>
-
-    <div id="pane-current" class="info-pane">
-      <div class="quake-card">
-        <div class="quake-card-top">
-          <div id="cur-shindo" class="shindo-badge lg">-</div>
-          <div class="quake-card-title">
-            <div id="cur-region" class="quake-region">震源地 -</div>
-            <div id="cur-time" class="quake-time">--:--</div>
-          </div>
-        </div>
-        <dl class="quake-facts">
-          <div><dt>最大震度</dt><dd id="cur-maxshindo">-</dd></div>
-          <div><dt>震源地</dt><dd id="cur-region2">-</dd></div>
-          <div><dt>マグニチュード</dt><dd id="cur-magnitude">-</dd></div>
-          <div><dt>深さ</dt><dd id="cur-depth">-</dd></div>
-        </dl>
-      </div>
-      <div class="section-label">直近の地震（クリックで再生）</div>
-      <ul id="recent-list" class="recent-list"></ul>
-    </div>
-
-    <div id="pane-history" class="info-pane hidden">
-      <div class="section-label">地震履歴（最新15件）</div>
-      <ul id="history-list" class="history-list"></ul>
-    </div>
-  </aside>
-
-  <!-- 右下: 地図の色 -->
   <div id="legend" class="legend">
     <div class="legend-head">
       <span class="legend-title">地図の色</span>
@@ -156,12 +132,28 @@
         <button id="style-color" class="style-btn" title="色だけの円">色</button>
       </span>
     </div>
-    <ul id="legend-list" class="legend-list"></ul>
-    <canvas id="legend-bar" class="legend-bar hidden" width="176" height="12"></canvas>
-    <div id="legend-ticks" class="legend-ticks hidden"><span>0</span><span>2</span><span>4</span><span>6</span><span>7</span></div>
+    <div class="legend-body">
+      <canvas id="legend-bar" width="18" height="170"></canvas>
+      <ul id="legend-list" class="legend-list"></ul>
+    </div>
   </div>
 
-  <!-- 下部: 再生タイムライン -->
+  <div id="coast-legend" class="coast-legend hidden">
+    <div class="legend-title">海岸線の色</div>
+    <ul class="coast-list">
+      <li><i style="background:#e838c8"></i>大津波警報</li>
+      <li><i style="background:#e0231c"></i>津波警報</li>
+      <li><i style="background:#f5d020"></i>津波注意報</li>
+      <li><i style="background:#4fc3f7"></i>津波予報</li>
+    </ul>
+  </div>
+
+  <section id="wave-strip" class="hidden">
+    <canvas id="wave-canvas"></canvas>
+    <div class="wave-scale">2gal/row</div>
+  </section>
+
+  <!-- ================= 下部: 再生 ================= -->
   <footer id="timeline">
     <button id="play-btn" class="ctl" title="再生 / 一時停止">▶</button>
     <button id="reset-btn" class="ctl" title="先頭へ">⟲</button>
@@ -172,23 +164,19 @@
     <div class="tl-time"><span id="tl-elapsed">+0.0s</span></div>
     <label class="speed">速度
       <select id="speed">
-        <option value="0.25">0.25x</option>
-        <option value="0.5">0.5x</option>
-        <option value="1" selected>1x</option>
-        <option value="2">2x</option>
-        <option value="4">4x</option>
-        <option value="8">8x</option>
+        <option value="0.25">0.25x</option><option value="0.5">0.5x</option>
+        <option value="1" selected>1x</option><option value="2">2x</option>
+        <option value="4">4x</option><option value="8">8x</option>
       </select>
     </label>
     <label class="toggle"><input id="sound-toggle" type="checkbox" checked> 音</label>
     <div id="scenario-name" class="scenario-name">シナリオ未読込</div>
   </footer>
 
-  <!-- 設定モード -->
+  <!-- ================= 設定モード ================= -->
   <section id="config-panel" class="hidden">
     <h2 class="config-title">シミュレーション設定</h2>
     <p class="config-hint">地図上をクリックすると震源を設定できます。</p>
-
     <div class="config-grid">
       <label>震央地名<input id="cfg-region" type="text" readonly></label>
       <label>緯度<input id="cfg-lat" type="number" step="0.01" value="38.10"></label>
@@ -207,22 +195,19 @@
       <label>すべり角 (°)<input id="cfg-rake" type="number" step="10" min="-180" max="180" value="90"></label>
       <label>発生時刻<input id="cfg-time" type="time" step="1"></label>
     </div>
-
     <div class="config-checks">
       <label><input id="cfg-aftershock" type="checkbox" checked> 余震を自動発生させる</label>
       <label><input id="cfg-tsunami" type="checkbox" checked> 津波を自動判定する</label>
       <label><input id="cfg-eew" type="checkbox" checked> 緊急地震速報を発表する</label>
+      <label><input id="cfg-drill" type="checkbox" checked> 「訓練」表示を出す</label>
     </div>
-
     <div class="config-preview" id="config-preview"></div>
-
     <div class="config-actions">
       <button id="cfg-run" class="primary">シミュレーション実行</button>
       <button id="cfg-random" class="ghost">ランダム</button>
     </div>
-
     <div class="config-scenarios">
-      <div class="section-label">保存済みシナリオ（高精度計算済み）</div>
+      <div class="sub-label">保存済みシナリオ（高精度計算済み）</div>
       <ul id="scenario-list" class="scenario-list"></ul>
     </div>
   </section>

@@ -1,4 +1,10 @@
-/* 全体制御: データ読み込み・モード切替・再生・描画ループ */
+/* 全体制御: データ読み込み・モード切替・再生・描画ループ
+ *
+ * 再生は 3 つの段階を進む。
+ *   detect  観測点が揺れを検出した範囲を四角で囲んで示す (発震直後)
+ *   monitor 緊急地震速報と P/S 波の広がりを示す
+ *   final   揺れが収まったあとの確定震度を細分区域で塗り分ける
+ */
 (function (global) {
   'use strict';
 
@@ -20,7 +26,6 @@
     var bit = i * this.nLon + j;
     return (this.bytes[bit >> 3] & (128 >> (bit & 7))) !== 0;
   };
-  /* 2 点間の経路が陸域に遮られているか (沿岸手前 15 km は判定しない) */
   LandMask.prototype.blocked = function (lat1, lon1, lat2, lon2) {
     var total = U.haversine(lat1, lon1, lat2, lon2);
     if (total <= 15) return false;
@@ -64,7 +69,6 @@
     var onLand = this.landmask ? this.landmask.isLand(lat, lon) : bestD <= 15;
     var landCode = best >= 0 ? st.region[best] : '';
     if (onLand && this.byCode[landCode]) return this.byCode[landCode].name;
-
     var sBest = -1, sD = Infinity;
     for (i = 0; i < this.seaLat.length; i++) {
       var ds = U.haversine(lat, lon, this.seaLat[i], this.seaLon[i]);
@@ -77,7 +81,7 @@
   /* ================= アプリ本体 ================= */
   var App = {
     mode: 'visual',
-    phase: 'monitor',          // 'monitor' = 揺れの最中 / 'final' = 確定震度の表示
+    phase: 'detect',
     playing: false,
     t: 0,
     speed: 1,
@@ -88,12 +92,11 @@
     lastFrame: 0,
     firedReports: 0,
     firedTsunami: false,
-    panelOn: { info: true, eew: true, tsunami: true, wave: true, sound: true }
+    drill: true,
+    panelOn: { info: true, wave: true, tsunami: true, sound: true }
   };
 
-  /* ---------------- 読み込み ---------------- */
   function fetchJSON(path) {
-    // 単一 HTML にまとめたビルドでは、埋め込んだデータをそのまま返す
     var bundled = global.__BUNDLED_DATA;
     if (bundled && Object.prototype.hasOwnProperty.call(bundled, path)) {
       return Promise.resolve(bundled[path]);
@@ -114,103 +117,85 @@
       fetchJSON('data/traveltime.json'),
       fetchJSON('data/tsunami_zones.json'),
       fetchJSON('data/landmask.json'),
+      fetchJSON('data/subdivisions.json'),
       fetchJSON('data/scenarios/index.json').catch(function () { return { scenarios: [] }; })
     ]).then(function (res) {
-      var stations = res[0];
+      var stations = res[0], subdivisions = res[6];
       self.stations = stations;
       self.geo = res[1];
       self.landmask = new LandMask(res[5]);
       self.regions = new Regions(res[2], stations, self.landmask);
       self.tsunamiZones = res[4].zones;
-      self.scenarioIndex = res[6].scenarios || [];
+      self.scenarioIndex = res[7].scenarios || [];
 
       self.engine = new global.Engine({
-        stations: stations,
-        traveltime: res[3],
-        regions: self.regions,
-        tsunamiZones: self.tsunamiZones,
-        landmask: self.landmask
+        stations: stations, traveltime: res[3], regions: self.regions,
+        tsunamiZones: self.tsunamiZones, landmask: self.landmask
       });
 
       self.view.setGeo(self.geo);
       self.view.setStations(stations);
       self.view.setTsunamiZones(self.tsunamiZones);
-      self.scratch = new Float32Array(stations.lat.length);
+      self.view.setSubdivisions(subdivisions, self.landmask);
+
+      // 観測点 -> 細分区域 の対応表
+      var codeIndex = {};
+      subdivisions.codes.forEach(function (c, i) { codeIndex[c] = i; });
+      self.stationArea = new Int16Array(stations.count);
+      for (var i = 0; i < stations.count; i++) {
+        var c = stations.subarea[i];
+        self.stationArea[i] = c && codeIndex[c] != null ? codeIndex[c] : -1;
+      }
+      self.subNames = subdivisions.names;
+      self.scratch = new Float32Array(stations.count);
     });
   };
 
-  /* ---------------- 再生対象の設定 ---------------- */
-  /* Python 側のシナリオ JSON を再生用の形に整える */
+  /* ---------------- 再生対象 ---------------- */
   App.adoptScenario = function (payload) {
-    var s = payload.stations;
-    var rt = U.decodeInt8(s.realtime);
-    var fin = U.decodeInt8(s.final);
-    var scale = s.scale || 10;
-    var nt = payload.timeline.count;
-    var ns = s.count;
-    var self = this;
+    var s = payload.stations, self = this;
+    var rt = U.decodeInt8(s.realtime), fin = U.decodeInt8(s.final);
+    var scale = s.scale || 10, nt = payload.timeline.count, ns = s.count;
+
+    function decodeScaled(b64, div) {
+      var a = U.decodeInt16(b64), o = new Float32Array(ns);
+      for (var i = 0; i < ns; i++) o[i] = a[i] / div;
+      return o;
+    }
+    var finals = new Float32Array(ns);
+    for (var i = 0; i < ns; i++) finals[i] = fin[i] / scale;
 
     this.setCurrent({
       title: payload.meta.name,
       source: payload.source,
       originDate: new Date(payload.meta.originTime),
-      nt: nt,
-      dt: payload.timeline.dt,
-      ns: ns,
+      nt: nt, dt: payload.timeline.dt, ns: ns,
       getValues: function (k) {
         var out = self.scratch;
-        for (var i = 0; i < ns; i++) out[i] = rt[i * nt + k] / scale;
+        for (var j = 0; j < ns; j++) out[j] = rt[j * nt + k] / scale;
         return out;
       },
-      final: (function () {
-        var f = new Float32Array(ns);
-        for (var i = 0; i < ns; i++) f[i] = fin[i] / scale;
-        return f;
-      })(),
-      tp: (function () {
-        var a = U.decodeInt16(s.tp), o = new Float32Array(ns);
-        for (var i = 0; i < ns; i++) o[i] = a[i] / 10;
-        return o;
-      })(),
-      ts: (function () {
-        var a = U.decodeInt16(s.ts), o = new Float32Array(ns);
-        for (var i = 0; i < ns; i++) o[i] = a[i] / 10;
-        return o;
-      })(),
+      final: finals,
+      tp: decodeScaled(s.tp, 10), ts: decodeScaled(s.ts, 10),
       rupture: payload.source.rupture,
       eew: payload.eew || [],
       aftershocks: payload.aftershocks || [],
-      tsunami: payload.tsunami || null,
-      precomputed: true
+      tsunami: payload.tsunami || null
     });
   };
 
-  /* ブラウザ内エンジンの結果を再生用の形に整える */
   App.adoptEngineResult = function (res, title, originDate) {
-    var ns = this.stations.lat.length;
-    var nt = res.timeline.count;
-    var rt = res.realtime;
-    var self = this;
+    var ns = this.stations.count, nt = res.timeline.count, rt = res.realtime, self = this;
     this.setCurrent({
-      title: title,
-      source: res.source,
-      originDate: originDate || new Date(),
-      nt: nt,
-      dt: res.timeline.dt,
-      ns: ns,
+      title: title, source: res.source, originDate: originDate || new Date(),
+      nt: nt, dt: res.timeline.dt, ns: ns,
       getValues: function (k) {
         var out = self.scratch;
         for (var i = 0; i < ns; i++) out[i] = rt[i * nt + k];
         return out;
       },
-      final: res.final,
-      tp: res.tp,
-      ts: res.ts,
-      rupture: null,
-      eew: res.eew,
-      aftershocks: res.aftershocks,
-      tsunami: res.tsunami,
-      precomputed: false
+      final: res.final, tp: res.tp, ts: res.ts, rupture: null,
+      eew: res.eew, aftershocks: res.aftershocks, tsunami: res.tsunami
     });
   };
 
@@ -219,74 +204,133 @@
     this.t = 0;
     this.firedReports = 0;
     this.firedTsunami = false;
+    this.phase = 'detect';
+    this._tween = null;
     if (this.sound) this.sound.cancelSpeech();
+
+    this.areaIntensity = this.aggregateBySubdivision(cur.final);
+    this.view._subStamp = (this.view._subStamp || 0) + 1;
+    this.waveStations = this.pickWaveStations(cur);
 
     el('track').max = String(cur.nt - 1);
     el('track').value = '0';
     el('scenario-name').textContent = cur.title || '';
 
-    this.phase = 'monitor';
-    this.prefIntensity = this.aggregateByPrefecture(cur.final);
-    this.waveStations = this.pickWaveStations(cur);
+    P.hideEEW(); P.hideTsunami(); P.hideFinalInfo(); P.hideDetect();
+    el('coast-legend').classList.add('hidden');
+    el('legend').classList.remove('hidden');
     el('wave-strip').classList.toggle('hidden', !this.panelOn.wave);
-    P.hideEEW();
-    P.hideTsunami();
-    P.hideFinalInfo();
-    P.showQuakeInfo({
-      region: cur.source.region,
-      magnitude: cur.source.magnitude,
-      depth: cur.source.depth,
-      maxIntensity: cur.source.maxIntensity,
-      time: cur.originDate
-    });
 
     this.pushHistory({
-      region: cur.source.region,
-      magnitude: cur.source.magnitude,
-      depth: cur.source.depth,
-      maxIntensity: cur.source.maxIntensity,
-      time: cur.originDate,
-      source: cur.source,
-      kind: 'main'
+      region: cur.source.region, magnitude: cur.source.magnitude,
+      depth: cur.source.depth, maxIntensity: cur.source.maxIntensity,
+      time: cur.originDate, source: cur.source
     }, true);
 
-    // 震源が見える程度にビューを合わせる
-    var mag = cur.source.magnitude;
-    var span = U.clamp(1.2 + (mag - 5) * 0.9, 1.2, 9);
-    this.view.proj.fitBounds(
-      cur.source.lat - span, cur.source.lon - span * 1.1,
-      cur.source.lat + span, cur.source.lon + span * 1.1
-    );
-    this.view.baseKey = '';
+    // 検知の演出のため、まず震源周辺に寄る
+    this.detectView = this.viewFor(cur, 0.45);
+    this.wideView = this.viewFor(cur, 1.0);
+    this.applyView(this.detectView);
     this.renderMarks();
   };
 
-  /* 都道府県ごとの最大計測震度を求める (確定震度の塗り分け用) */
-  App.aggregateByPrefecture = function (finals) {
-    var pref = this.stations.pref;
-    var out = {};
-    for (var i = 0; i < finals.length; i++) {
-      var code = pref[i];
-      var v = finals[i];
-      if (!(v > -3)) continue;
-      if (out[code] == null || v > out[code]) out[code] = v;
+  /* 震源の規模に応じた表示範囲 */
+  App.viewFor = function (cur, scale) {
+    var span = U.clamp(1.3 + (cur.source.magnitude - 5) * 0.95, 1.0, 9) * scale;
+    return { lat: cur.source.lat, lon: cur.source.lon, span: Math.max(span, 0.5) };
+  };
+
+  App.applyView = function (v) {
+    this.view.proj.fitBounds(v.lat - v.span, v.lon - v.span * 1.15,
+                             v.lat + v.span, v.lon + v.span * 1.15);
+    this.view.baseKey = '';
+    this.view._subCache = null;
+  };
+
+  /* 表示範囲をなめらかに動かす */
+  App.tweenView = function (to, seconds) {
+    var p = this.view.proj;
+    this._tween = {
+      from: { lat: p.centerLat, lon: p.centerLon, zoom: p.zoom },
+      to: to, elapsed: 0, dur: seconds
+    };
+  };
+
+  App.stepTween = function (dt) {
+    var tw = this._tween;
+    if (!tw) return;
+    tw.elapsed += dt;
+    var u = Math.min(tw.elapsed / tw.dur, 1);
+    var e = u < 0.5 ? 2 * u * u : 1 - Math.pow(-2 * u + 2, 2) / 2;   // ease in-out
+
+    if (!tw.target) {
+      // 目標の中心とズームを一度だけ求める
+      var p = this.view.proj;
+      var save = { lat: p.centerLat, lon: p.centerLon, zoom: p.zoom };
+      this.applyView(tw.to);
+      tw.target = { lat: p.centerLat, lon: p.centerLon, zoom: p.zoom };
+      p.centerLat = save.lat; p.centerLon = save.lon; p.zoom = save.zoom;
+    }
+    var pr = this.view.proj;
+    pr.centerLat = tw.from.lat + (tw.target.lat - tw.from.lat) * e;
+    pr.centerLon = tw.from.lon + (tw.target.lon - tw.from.lon) * e;
+    pr.zoom = Math.exp(Math.log(tw.from.zoom) +
+                       (Math.log(tw.target.zoom) - Math.log(tw.from.zoom)) * e);
+    this.view.baseKey = '';
+    this.view._subCache = null;
+    if (u >= 1) this._tween = null;
+  };
+
+  /* ---------------- 集計 ---------------- */
+  App.aggregateBySubdivision = function (values) {
+    var idx = this.stationArea;
+    var n = this.view.subCodes ? this.view.subCodes.length : 0;
+    var out = new Float32Array(n);
+    out.fill(-3);
+    for (var i = 0; i < values.length; i++) {
+      var a = idx[i];
+      if (a < 0) continue;
+      if (values[i] > out[a]) out[a] = values[i];
     }
     return out;
   };
 
-  /* 波形表示に使う観測点を、震源に近い順で距離を散らして選ぶ */
+  App.topAreas = function (areaIntensity, limit) {
+    var out = [];
+    for (var i = 0; i < areaIntensity.length; i++) {
+      if (areaIntensity[i] >= 0.5) out.push({ name: this.subNames[i], intensity: areaIntensity[i] });
+    }
+    out.sort(function (a, b) { return b.intensity - a.intensity; });
+    return out.slice(0, limit || 8);
+  };
+
   App.pickWaveStations = function (cur) {
-    var st = this.stations, n = st.lat.length;
-    var order = [];
+    var st = this.stations, n = st.lat.length, order = [];
     for (var i = 0; i < n; i++) {
       order.push([i, U.haversine(cur.source.lat, cur.source.lon, st.lat[i], st.lon[i])]);
     }
     order.sort(function (a, b) { return a[1] - b[1]; });
-    var picks = [], step = Math.max(1, Math.floor(order.length / 400));
-    for (var k = 0; k < 8 && k * step < order.length; k++) {
-      picks.push(order[k * step * (k + 1)] ? order[k * step * (k + 1)][0] : order[k][0]);
+    var picks = [];
+    for (var k = 0; k < 8; k++) {
+      var j = Math.min(Math.floor(Math.pow(k / 7, 2) * (order.length - 1)), order.length - 1);
+      picks.push(order[j][0]);
     }
     return picks;
+  };
+
+  /* 揺れを検出している観測点の範囲 */
+  App.detectionBox = function (values) {
+    var st = this.stations;
+    var latMin = 1e9, latMax = -1e9, lonMin = 1e9, lonMax = -1e9, any = false;
+    for (var i = 0; i < values.length; i++) {
+      if (values[i] < -0.5) continue;
+      any = true;
+      if (st.lat[i] < latMin) latMin = st.lat[i];
+      if (st.lat[i] > latMax) latMax = st.lat[i];
+      if (st.lon[i] < lonMin) lonMin = st.lon[i];
+      if (st.lon[i] > lonMax) lonMax = st.lon[i];
+    }
+    return any ? { latMin: latMin, latMax: latMax, lonMin: lonMin, lonMax: lonMax } : null;
   };
 
   /* ---------------- 履歴 ---------------- */
@@ -303,13 +347,10 @@
 
   App.refreshLists = function () {
     var self = this;
-    P.renderRecent(this.recentResults, this.activeRecent, function (i, q) {
-      self.replay(i, q);
-    });
+    P.renderRecent(this.recentResults, this.activeRecent, function (i, q) { self.replay(i, q); });
     P.renderHistory(this.history);
   };
 
-  /* 直近リストから選んだ地震を再生する */
   App.replay = function (i, q) {
     this.activeRecent = i;
     var src = q.source;
@@ -320,7 +361,6 @@
     }, { duration: 200, aftershocks: false, seed: 4321 });
     this.adoptEngineResult(res, q.region + ' ' + U.formatMagnitude(q.magnitude), q.time);
     this.play(true);
-    P.toast(q.region + ' の地震を再生します');
   };
 
   /* ---------------- 再生制御 ---------------- */
@@ -336,52 +376,56 @@
 
   App.seek = function (k) {
     if (!this.current) return;
-    this.t = k * this.current.dt;
-    var atEnd = k >= this.current.nt - 1;
-    if (!atEnd && this.phase === 'final') {
-      this.phase = 'monitor';
+    var cur = this.current;
+    this.t = k * cur.dt;
+    this._tween = null;
+
+    this.firedReports = 0;
+    for (var i = 0; i < cur.eew.length; i++) if (cur.eew[i].issuedAt <= this.t) this.firedReports = i + 1;
+
+    var first = cur.eew.length ? cur.eew[0].issuedAt : 6;
+    var atEnd = k >= cur.nt - 1;
+    this.phase = atEnd ? 'final' : (this.t < first ? 'detect' : 'monitor');
+
+    if (this.phase === 'final') {
+      this.showFinal();
+    } else {
       P.hideFinalInfo();
       el('wave-strip').classList.toggle('hidden', !this.panelOn.wave);
+      if (this.firedReports > 0) P.showEEW(cur.eew[this.firedReports - 1], cur.originDate);
+      else P.hideEEW();
     }
-    // 巻き戻したら発表済みの報をリセットする
-    this.firedReports = 0;
-    this.firedTsunami = false;
-    var eew = this.current.eew;
-    for (var i = 0; i < eew.length; i++) if (eew[i].issuedAt <= this.t) this.firedReports = i + 1;
-    if (this.firedReports > 0) P.showEEW(eew[this.firedReports - 1], this.current.originDate);
-    else P.hideEEW();
-    if (this.current.tsunami && this.t >= this.current.tsunami.issuedAt && this.panelOn.tsunami) {
-      P.showTsunami(this.current.tsunami);
-      this.firedTsunami = true;
-    } else P.hideTsunami();
+    this.firedTsunami = !!(cur.tsunami && this.t >= cur.tsunami.issuedAt);
+    if (this.firedTsunami && this.panelOn.tsunami) P.showTsunami(cur.tsunami, cur.originDate);
+    else P.hideTsunami();
+    el('coast-legend').classList.toggle('hidden', !this.firedTsunami);
+    el('legend').classList.toggle('hidden', this.firedTsunami);
   };
 
-  /* タイムライン上の目印 (EEW 各報・津波発表) */
   App.renderMarks = function () {
     var wrap = el('track-marks');
     wrap.innerHTML = '';
     if (!this.current) return;
     var total = (this.current.nt - 1) * this.current.dt;
-    var self = this;
     (this.current.eew || []).forEach(function (r) {
-      var i2 = document.createElement('i');
-      i2.style.left = (100 * r.issuedAt / total) + '%';
-      i2.title = '第' + r.number + '報';
-      wrap.appendChild(i2);
+      var i = document.createElement('i');
+      i.style.left = (100 * r.issuedAt / total) + '%';
+      i.title = '第' + r.number + '報';
+      wrap.appendChild(i);
     });
     if (this.current.tsunami) {
       var m = document.createElement('i');
       m.className = 'tsunami';
-      m.style.left = (100 * self.current.tsunami.issuedAt / total) + '%';
-      m.title = self.current.tsunami.maxGrade;
+      m.style.left = (100 * this.current.tsunami.issuedAt / total) + '%';
       wrap.appendChild(m);
     }
   };
 
-  /* ---------------- 毎フレーム処理 ---------------- */
+  /* ---------------- 毎フレーム ---------------- */
   App.tick = function (now) {
     var dtReal = Math.min((now - this.lastFrame) / 1000, 0.25);
     this.lastFrame = now;
+    this.stepTween(dtReal);
 
     if (this.playing && this.current) {
       this.t += dtReal * this.speed;
@@ -400,187 +444,142 @@
     requestAnimationFrame(function (ts) { self.tick(ts); });
   };
 
-  /* 経過時間に応じて EEW・津波を発表する */
   App.processEvents = function () {
-    var cur = this.current;
-    var eew = cur.eew || [];
+    var cur = this.current, eew = cur.eew || [];
+
     while (this.firedReports < eew.length && eew[this.firedReports].issuedAt <= this.t) {
       var r = eew[this.firedReports];
-      if (this.panelOn.eew) P.showEEW(r, cur.originDate);
       if (this.firedReports === 0) {
+        // 検知の演出から緊急地震速報の画面へ移る
+        this.phase = 'monitor';
+        this.tweenView(this.wideView, 1.4);
         if (r.kind === '警報') this.sound.warning(); else this.sound.forecast();
         this.sound.announceEEW(r);
       } else {
         this.sound.blip();
-        // 警報へ格上げされた、または予想震度が変わったときだけ読み上げ直す
         var prev = eew[this.firedReports - 1];
-        if (prev && (prev.kind !== r.kind || prev.maxShindo !== r.maxShindo)) {
-          this.sound.announceEEW(r);
-        }
+        if (prev && (prev.kind !== r.kind || prev.maxShindo !== r.maxShindo)) this.sound.announceEEW(r);
       }
+      P.showEEW(r, cur.originDate);
       this.firedReports++;
     }
 
     if (cur.tsunami && !this.firedTsunami && this.t >= cur.tsunami.issuedAt) {
-      if (this.panelOn.tsunami) P.showTsunami(cur.tsunami);
+      this.firedTsunami = true;
+      if (this.panelOn.tsunami) P.showTsunami(cur.tsunami, cur.originDate);
+      el('coast-legend').classList.remove('hidden');
+      el('legend').classList.add('hidden');
       this.sound.tsunami(cur.tsunami.maxLevel);
       this.sound.announceTsunami(cur.tsunami);
-      this.firedTsunami = true;
-      P.toast(cur.tsunami.maxGrade + ' が発表されました');
-    }
-
-    // 主要動到達までのカウントダウン (画面中心の最寄り観測点)
-    if (this.firedReports > 0) {
-      var idx = this.centerStation();
-      if (idx >= 0) {
-        var ts = cur.ts[idx];
-        var left = ts - this.t;
-        var name = this.stations.name[idx];
-        if (left > 0 && left < 60) {
-          P.setCountdown(name + ' 主要動まで 約' + Math.ceil(left) + '秒');
-          var whole = Math.ceil(left);
-          if (whole !== this._lastTick && whole <= 10) {
-            this._lastTick = whole;
-            this.sound.tick(whole <= 1);
-          }
-        } else if (left <= 0 && left > -8) {
-          P.setCountdown(name + ' 主要動到達');
-        } else {
-          P.setCountdown('');
-        }
-      }
     }
   };
 
-  App.centerStation = function () {
-    if (this._centerIdx != null && this._centerKey === this.view.viewKey()) return this._centerIdx;
-    var c = this.view.proj.unproject(this.view.cssWidth / 2, this.view.cssHeight / 2);
-    var st = this.stations, best = -1, bestD = Infinity;
-    for (var i = 0; i < st.lat.length; i++) {
-      var d = U.haversine(c[0], c[1], st.lat[i], st.lon[i]);
-      if (d < bestD) { bestD = d; best = i; }
-    }
-    this._centerIdx = best;
-    this._centerKey = this.view.viewKey();
-    return best;
-  };
-
-  /* 本震の再生が終わったら余震の再生を予約する */
   App.onPlaybackEnd = function () {
     var cur = this.current;
     if (!cur) return;
-    // 揺れが収まったら観測された震度の確定表示に切り替える
     this.phase = 'final';
-    P.hideEEW();
-    el('wave-strip').classList.add('hidden');
-    P.showFinalInfo({
-      region: cur.source.region,
-      magnitude: cur.source.magnitude,
-      depth: cur.source.depth,
-      maxIntensity: cur.source.maxIntensity,
-      time: cur.originDate,
-      tsunami: cur.tsunami
-    });
+    this.showFinal();
     this.sound.info();
     this.sound.announceQuake({
-      region: cur.source.region,
-      shindo: cur.source.maxShindo,
-      magnitude: cur.source.magnitude,
-      depth: cur.source.depth
+      region: cur.source.region, shindo: cur.source.maxShindo,
+      magnitude: cur.source.magnitude, depth: cur.source.depth
     });
+    this.scheduleAftershocks();
+  };
+
+  App.showFinal = function () {
+    var cur = this.current;
+    P.hideEEW();
+    P.hideDetect();
+    el('wave-strip').classList.add('hidden');
+    P.showFinalInfo({
+      region: cur.source.region, magnitude: cur.source.magnitude,
+      depth: cur.source.depth, maxIntensity: cur.source.maxIntensity,
+      time: cur.originDate, areas: this.topAreas(this.areaIntensity, 8)
+    });
+  };
+
+  App.scheduleAftershocks = function () {
+    var cur = this.current;
     if (!cur.aftershocks || !cur.aftershocks.length) return;
     var notable = cur.aftershocks.filter(function (a) { return a.maxIntensity >= 1.5; }).slice(0, 8);
     if (!notable.length) return;
-
-    var self = this;
-    var i = 0;
+    var self = this, i = 0;
     P.toast('余震活動を再生します（' + notable.length + '回）');
     function next() {
       if (i >= notable.length || self._abortAftershocks) return;
       var a = notable[i++];
       var when = new Date(cur.originDate.getTime() + a.time * 1000);
-      self.pushHistory({
-        region: a.region, magnitude: a.magnitude, depth: a.depth,
-        maxIntensity: a.maxIntensity, time: when,
-        source: { lat: a.lat, lon: a.lon, depth: a.depth, magnitude: a.magnitude, kind: cur.source.kind },
-        kind: 'aftershock'
-      }, true);
       var res = self.engine.simulate({
         lat: a.lat, lon: a.lon, depth: a.depth, magnitude: a.magnitude,
         kind: cur.source.kind, strike: 0, dip: 45, rake: 90
       }, { duration: 120, aftershocks: false, tsunami: false, seed: 900 + i });
-      self.adoptEngineResultKeepHistory(res, '余震 ' + a.region + ' ' + U.formatMagnitude(a.magnitude), when);
+      self.adoptEngineResult(res, '余震 ' + a.region + ' ' + U.formatMagnitude(a.magnitude), when);
       self.play(true);
       setTimeout(next, 11000);
     }
-    // 確定した地震情報を読める時間を確保してから余震に移る
     setTimeout(next, 9000);
-  };
-
-  /* 余震再生では履歴を二重登録しない */
-  App.adoptEngineResultKeepHistory = function (res, title, when) {
-    var pushed = this.pushHistory;
-    this.pushHistory = function () {};
-    this.adoptEngineResult(res, title, when);
-    this.pushHistory = pushed;
-    this.refreshLists();
   };
 
   /* ---------------- 描画 ---------------- */
   App.draw = function () {
-    var v = this.view;
+    var v = this.view, cur = this.current;
     v.clear();
-    var cur = this.current;
 
     if (cur) {
       var k = U.clamp(Math.round(this.t / cur.dt), 0, cur.nt - 1);
+      var vals = cur.getValues(k);
 
       if (this.phase === 'final') {
-        // 確定震度: 地域を観測震度で塗り分けて震度バッジを置く
-        v.drawObservedAreas(this.prefIntensity);
+        v.drawObservedSubdivisions(this.areaIntensity);
         v.drawStationDots(cur.final);
-        v.drawAreaBadges(this.prefIntensity);
+        v.drawSubdivisionBadges(this.areaIntensity);
+        if (cur.tsunami && this.firedTsunami) v.drawTsunami(cur.tsunami, this.t);
       } else {
-        v.drawStations(cur.getValues(k));
-      }
-
-      if (cur.tsunami && this.firedTsunami) v.drawTsunami(cur.tsunami, this.t);
-      if (this.phase === 'monitor') {
+        if (cur.tsunami && this.firedTsunami) v.drawTsunami(cur.tsunami, this.t);
+        if (this.t > 0) {
+          v.drawWavefronts(cur.source.lat, cur.source.lon,
+                           this.waveRadius('P', cur.source.depth, this.t),
+                           this.waveRadius('S', cur.source.depth, this.t));
+        }
         if (cur.rupture) v.drawRupture(cur.rupture, this.t);
-        // P/S 波面 (発震時からの経過時間に対応する半径)
-        var pr = this.waveRadius('P', cur.source.depth, this.t);
-        var sr = this.waveRadius('S', cur.source.depth, this.t);
-        if (this.t > 0) v.drawWavefronts(cur.source.lat, cur.source.lon, pr, sr);
+        if (this.phase === 'detect') {
+          // 検知の段階は震度の数字を出さず、色の反応だけを見せる
+          var saved = v.stationStyle;
+          v.stationStyle = 'color';
+          v.drawStations(vals);
+          v.stationStyle = saved;
+          v.drawDetectionBox(this.detectionBox(vals), this.t);
+        } else {
+          v.drawStations(vals);
+        }
       }
 
-      var pulse = (this.t % 2) / 2;
       v.drawEpicenter(cur.source.lat, cur.source.lon,
-                      this.phase === 'monitor' && this.t < 30 ? pulse : 0);
+                      this.phase !== 'final' && this.t < 30 ? (this.t % 2) / 2 : 0);
 
       el('tl-elapsed').textContent = U.formatElapsed(this.t);
-      if (this.panelOn.wave && this.phase === 'monitor') this.drawWaveStrip(k);
-      if (this.phase === 'monitor' && this.firedReports > 0) {
-        var vals = cur.getValues(k), mx = -3;
+      if (this.panelOn.wave && this.phase !== 'final') this.drawWaveStrip(k);
+
+      // 揺れを検出パネル (現在のリアルタイム震度)
+      if (this.phase !== 'final') {
+        var live = this.aggregateBySubdivision(vals);
+        var mx = -3;
         for (var q = 0; q < vals.length; q++) if (vals[q] > mx) mx = vals[q];
-        P.setRealtimeMax(mx);
+        P.showDetect(mx, this.topAreas(live, 6));
       }
     } else {
       v.drawStations(null);
-    }
-    if (this.mode === 'config' && this._preview) {
-      v.drawSourcePreview(this._preview.src, this._preview.dim);
     }
     v.drawScaleBar();
     this.updateClock();
   };
 
-  /* 観測波形 (ドラムロール風) の描画
-   * リアルタイム震度から振幅 a = 10^((I - 0.94) / 2) [gal] を逆算し、
-   * 高周波の揺らぎを重ねて時刻歴らしく見せる。 */
   App.drawWaveStrip = function (k) {
     var cv = el('wave-canvas');
     if (!cv || !this.waveStations || !this.current) return;
     var rect = cv.getBoundingClientRect();
+    if (rect.width < 2) return;
     var dpr = Math.min(global.devicePixelRatio || 1, 2);
     if (cv.width !== Math.round(rect.width * dpr)) {
       cv.width = Math.round(rect.width * dpr);
@@ -591,27 +590,20 @@
     var w = rect.width, h = rect.height;
     ctx.clearRect(0, 0, w, h);
 
-    var cur = this.current;
-    var rows = this.waveStations.length;
-    var rowH = h / rows;
-    var span = 40;                       // 表示する秒数
-    var k0 = Math.max(0, k - span);
-    var pts = k - k0 + 1;
+    var cur = this.current, rows = this.waveStations.length, rowH = h / rows;
+    var k0 = Math.max(0, k - 40), pts = k - k0 + 1;
     if (pts < 2) return;
 
     ctx.lineWidth = 1;
-    ctx.strokeStyle = '#e8f2ff';
     for (var r = 0; r < rows; r++) {
-      var idx = this.waveStations[r];
-      var yMid = rowH * (r + 0.5);
+      var idx = this.waveStations[r], yMid = rowH * (r + 0.5);
+      ctx.strokeStyle = '#dcecff';
       ctx.beginPath();
       for (var j = 0; j <= k - k0; j++) {
         var kk = k0 + j;
-        var vals = cur.getValues(kk);
-        var inten = vals[idx];
+        var inten = cur.getValues(kk)[idx];
         var amp = inten > -3 ? Math.pow(10, (inten - 0.94) / 2) : 0;
-        var norm = Math.min(Math.log10(1 + amp) / 2.6, 1);   // 0..1
-        // 擬似的な高周波成分 (観測点と時刻で決まる決定論的な揺らぎ)
+        var norm = Math.min(Math.log10(1 + amp) / 2.6, 1);
         var osc = Math.sin(kk * 12.9898 + idx * 78.233) * Math.sin(kk * 3.7 + r);
         var y = yMid - norm * (rowH * 0.46) * osc;
         var x = (j / (pts - 1)) * (w - 4) + 2;
@@ -619,22 +611,18 @@
       }
       ctx.stroke();
       if (r < rows - 1) {
-        ctx.strokeStyle = 'rgba(255,255,255,.18)';
+        ctx.strokeStyle = 'rgba(255,255,255,.15)';
         ctx.beginPath();
         ctx.moveTo(0, rowH * (r + 1)); ctx.lineTo(w, rowH * (r + 1));
         ctx.stroke();
-        ctx.strokeStyle = '#e8f2ff';
       }
     }
   };
 
-  /* 走時表を逆に引いて、経過時間に対応する波面半径 [km] を求める */
   App.waveRadius = function (phase, depth, t) {
     if (t <= 0) return 0;
-    var tt = this.engine.tt;
-    var x = tt.distances;
-    var lo = 0, hi = 2000;
-    for (var i = 0; i < 24; i++) {
+    var lo = 0, hi = 2200;
+    for (var i = 0; i < 22; i++) {
       var mid = (lo + hi) / 2;
       if (this.engine.travelTime(phase, depth, mid) < t) lo = mid; else hi = mid;
     }
@@ -647,52 +635,28 @@
     el('clock-text').textContent = U.formatDate(d) + ' ' + U.formatClock(d);
   };
 
-  /* 起動時の既定シナリオ (計算済みデータが無いとき) */
-  var DEFAULT_SOURCE = {
-    lat: 35.62, lon: 139.78, depth: 30, magnitude: 7.3, kind: 'intraslab',
-    strike: 300, dip: 70, rake: 120
-  };
-
-  App.runDefault = function () {
-    var origin = new Date();
-    var res = this.engine.simulate(DEFAULT_SOURCE, {
-      duration: 240, aftershocks: true, tsunami: true, eew: true,
-      aftershockDays: 3, seed: 20260101
-    });
-    this.adoptEngineResult(res, res.source.region + ' ' + U.formatMagnitude(DEFAULT_SOURCE.magnitude), origin);
-    this.play(true);
-    // 設定モードのフォームも既定値に合わせておく
-    el('cfg-lat').value = DEFAULT_SOURCE.lat.toFixed(2);
-    el('cfg-lon').value = DEFAULT_SOURCE.lon.toFixed(2);
-    el('cfg-depth').value = String(DEFAULT_SOURCE.depth);
-    el('cfg-mag').value = DEFAULT_SOURCE.magnitude.toFixed(1);
-    el('cfg-kind').value = DEFAULT_SOURCE.kind;
-    el('cfg-strike').value = String(DEFAULT_SOURCE.strike);
-    el('cfg-dip').value = String(DEFAULT_SOURCE.dip);
-    el('cfg-rake').value = String(DEFAULT_SOURCE.rake);
-  };
-
   /* ---------------- 設定モード ---------------- */
+  var DEFAULT_SOURCE = {
+    lat: 33.10, lon: 136.20, depth: 20, magnitude: 8.6, kind: 'interplate',
+    strike: 250, dip: 12, rake: 90
+  };
+
   App.readConfig = function () {
-    var timeStr = el('cfg-time').value;
-    var origin = new Date();
+    var timeStr = el('cfg-time').value, origin = new Date();
     if (timeStr) {
       var parts = timeStr.split(':');
       origin.setHours(+parts[0] || 0, +parts[1] || 0, +(parts[2] || 0), 0);
     }
     return {
-      lat: parseFloat(el('cfg-lat').value),
-      lon: parseFloat(el('cfg-lon').value),
-      depth: parseFloat(el('cfg-depth').value),
-      magnitude: parseFloat(el('cfg-mag').value),
-      kind: el('cfg-kind').value,
-      strike: parseFloat(el('cfg-strike').value),
-      dip: parseFloat(el('cfg-dip').value),
-      rake: parseFloat(el('cfg-rake').value),
+      lat: parseFloat(el('cfg-lat').value), lon: parseFloat(el('cfg-lon').value),
+      depth: parseFloat(el('cfg-depth').value), magnitude: parseFloat(el('cfg-mag').value),
+      kind: el('cfg-kind').value, strike: parseFloat(el('cfg-strike').value),
+      dip: parseFloat(el('cfg-dip').value), rake: parseFloat(el('cfg-rake').value),
       origin: origin,
       aftershocks: el('cfg-aftershock').checked,
       tsunami: el('cfg-tsunami').checked,
-      eew: el('cfg-eew').checked
+      eew: el('cfg-eew').checked,
+      drill: el('cfg-drill').checked
     };
   };
 
@@ -711,24 +675,39 @@
   };
 
   App.runConfig = function () {
-    var c = this.readConfig();
+    var c = this.readConfig(), self = this;
     if (!isFinite(c.lat) || !isFinite(c.lon) || !isFinite(c.magnitude)) {
       P.toast('入力値を確認してください'); return;
     }
     P.toast('計算中…');
-    var self = this;
     setTimeout(function () {
       var res = self.engine.simulate(c, {
-        duration: 240, aftershocks: c.aftershocks, tsunami: c.tsunami,
+        duration: 260, aftershocks: c.aftershocks, tsunami: c.tsunami,
         eew: c.eew, aftershockDays: 3, seed: Date.now() & 0xffff
       });
       self._abortAftershocks = false;
-      self.adoptEngineResult(res, c.magnitude.toFixed(1) + ' ' + res.source.region, c.origin);
+      self.setDrill(c.drill);
+      self.adoptEngineResult(res, res.source.region + ' ' + U.formatMagnitude(c.magnitude), c.origin);
       self.setMode('visual');
       self.play(true);
-      P.toast(res.source.region + ' M' + c.magnitude.toFixed(1) +
-              ' 最大震度' + res.source.maxShindo);
     }, 30);
+  };
+
+  App.runDefault = function () {
+    var res = this.engine.simulate(DEFAULT_SOURCE, {
+      duration: 260, aftershocks: true, tsunami: true, eew: true,
+      aftershockDays: 3, seed: 20260101
+    });
+    this.adoptEngineResult(res, res.source.region + ' ' + U.formatMagnitude(DEFAULT_SOURCE.magnitude), new Date());
+    this.play(true);
+    el('cfg-lat').value = DEFAULT_SOURCE.lat.toFixed(2);
+    el('cfg-lon').value = DEFAULT_SOURCE.lon.toFixed(2);
+    el('cfg-depth').value = String(DEFAULT_SOURCE.depth);
+    el('cfg-mag').value = DEFAULT_SOURCE.magnitude.toFixed(1);
+    el('cfg-kind').value = DEFAULT_SOURCE.kind;
+    el('cfg-strike').value = String(DEFAULT_SOURCE.strike);
+    el('cfg-dip').value = String(DEFAULT_SOURCE.dip);
+    el('cfg-rake').value = String(DEFAULT_SOURCE.rake);
   };
 
   App.loadScenario = function (entry) {
@@ -739,14 +718,12 @@
       self.adoptScenario(payload);
       self.setMode('visual');
       self.play(true);
-      P.toast(payload.meta.name + ' を再生します');
     }).catch(function (e) { P.toast(e.message); });
   };
 
   App.renderScenarioList = function () {
-    var ul = el('scenario-list');
+    var ul = el('scenario-list'), self = this;
     ul.innerHTML = '';
-    var self = this;
     if (!this.scenarioIndex.length) {
       var li0 = document.createElement('li');
       li0.style.color = 'var(--text-faint)';
@@ -761,10 +738,12 @@
       P.setBadge(badge, s.maxIntensity);
       var main = document.createElement('div');
       main.className = 'sl-main';
-      var n = document.createElement('div'); n.className = 'sl-name'; n.textContent = s.name;
-      var sub = document.createElement('div'); sub.className = 'sl-sub';
-      sub.textContent = U.formatMagnitude(s.magnitude) + ' / ' + U.formatDepth(s.depth) +
-                        ' / 最大震度' + s.maxShindo + (s.tsunami ? ' / ' + s.tsunami : '');
+      var n = document.createElement('div');
+      n.className = 'sl-name'; n.textContent = s.name;
+      var sub = document.createElement('div');
+      sub.className = 'sl-sub';
+      sub.textContent = U.formatMagnitude(s.magnitude) + ' / ' + Math.round(s.depth) + 'km / 最大震度' +
+                        s.maxShindo + (s.tsunami ? ' / ' + s.tsunami : '');
       main.appendChild(n); main.appendChild(sub);
       li.appendChild(badge); li.appendChild(main);
       li.addEventListener('click', function () { self.loadScenario(s); });
@@ -772,7 +751,11 @@
     });
   };
 
-  /* ---------------- モード ---------------- */
+  App.setDrill = function (on) {
+    this.drill = !!on;
+    el('drill-badge').classList.toggle('hidden', !this.drill);
+  };
+
   App.setMode = function (mode) {
     this.mode = mode;
     el('mode-visual').classList.toggle('active', mode === 'visual');
@@ -780,23 +763,21 @@
     el('mode-visual').setAttribute('aria-selected', String(mode === 'visual'));
     el('mode-config').setAttribute('aria-selected', String(mode === 'config'));
     el('config-panel').classList.toggle('hidden', mode !== 'config');
-    el('info-panel').classList.toggle('hidden', mode === 'config');
+    el('rail-config').classList.toggle('active', mode === 'config');
     this.view.canvas.classList.toggle('picking', mode === 'config');
-    if (mode === 'config') {
-      this.updateConfigPreview();
-      this.renderScenarioList();
-    } else {
-      this._preview = null;
-    }
+    if (mode === 'config') { this.updateConfigPreview(); this.renderScenarioList(); }
+    else this._preview = null;
   };
 
   /* ---------------- 入力 ---------------- */
   App.bind = function () {
-    var self = this;
-    var canvas = this.view.canvas;
+    var self = this, canvas = this.view.canvas;
 
     el('mode-visual').addEventListener('click', function () { self.setMode('visual'); });
     el('mode-config').addEventListener('click', function () { self.setMode('config'); });
+    el('rail-config').addEventListener('click', function () {
+      self.setMode(self.mode === 'config' ? 'visual' : 'config');
+    });
 
     el('play-btn').addEventListener('click', function () { self.play(); });
     el('reset-btn').addEventListener('click', function () {
@@ -822,13 +803,59 @@
       });
     el('cfg-run').addEventListener('click', function () { self.runConfig(); });
     el('cfg-random').addEventListener('click', function () { self.randomize(); });
+    el('cfg-drill').addEventListener('change', function () { self.setDrill(this.checked); });
 
-    // 地図の操作
+    el('rail-info').addEventListener('click', function () {
+      self.panelOn.info = !self.panelOn.info;
+      this.classList.toggle('active', self.panelOn.info);
+      el('info-panel').classList.toggle('hidden', !self.panelOn.info);
+    });
+    el('rail-wave').addEventListener('click', function () {
+      self.panelOn.wave = !self.panelOn.wave;
+      this.classList.toggle('active', self.panelOn.wave);
+      el('wave-strip').classList.toggle('hidden', !self.panelOn.wave || self.phase === 'final');
+    });
+    el('rail-tsunami').addEventListener('click', function () {
+      self.panelOn.tsunami = !self.panelOn.tsunami;
+      this.classList.toggle('active', self.panelOn.tsunami);
+      if (!self.panelOn.tsunami) P.hideTsunami();
+      else if (self.firedTsunami && self.current) P.showTsunami(self.current.tsunami, self.current.originDate);
+    });
+
+    function setStationStyle(style) {
+      self.view.stationStyle = style;
+      P.setLegendStyle(style);
+      try { localStorage.setItem('stationStyle', style); } catch (e) { /* 保存できなくても続行 */ }
+    }
+    el('style-number').addEventListener('click', function () { setStationStyle('number'); });
+    el('style-color').addEventListener('click', function () { setStationStyle('color'); });
+    var saved = null;
+    try { saved = localStorage.getItem('stationStyle'); } catch (e) { saved = null; }
+    setStationStyle(saved === 'color' ? 'color' : 'number');
+
+    el('zoom-in').addEventListener('click', function () {
+      self._tween = null;
+      self.view.proj.zoomAt(1.4, self.view.cssWidth / 2, self.view.cssHeight / 2);
+      self.view.baseKey = ''; self.view._subCache = null;
+    });
+    el('zoom-out').addEventListener('click', function () {
+      self._tween = null;
+      self.view.proj.zoomAt(1 / 1.4, self.view.cssWidth / 2, self.view.cssHeight / 2);
+      self.view.baseKey = ''; self.view._subCache = null;
+    });
+    el('zoom-fit').addEventListener('click', function () {
+      self._tween = null;
+      if (self.current) self.applyView(self.wideView);
+      else { self.view.proj.fitBounds(30.0, 128.0, 45.5, 146.0); self.view.baseKey = ''; }
+      self.view._subCache = null;
+    });
+
     var dragging = false, lastX = 0, lastY = 0, moved = 0;
     canvas.addEventListener('pointerdown', function (e) {
       dragging = true; moved = 0; lastX = e.clientX; lastY = e.clientY;
       canvas.setPointerCapture(e.pointerId);
       canvas.classList.add('dragging');
+      self._tween = null;
       self.sound.unlock();
     });
     canvas.addEventListener('pointermove', function (e) {
@@ -837,7 +864,7 @@
       moved += Math.abs(dx) + Math.abs(dy);
       lastX = e.clientX; lastY = e.clientY;
       self.view.proj.panByPixels(dx, dy);
-      self.view.baseKey = '';
+      self.view.baseKey = ''; self.view._subCache = null;
     });
     canvas.addEventListener('pointerup', function (e) {
       dragging = false;
@@ -852,77 +879,12 @@
     });
     canvas.addEventListener('wheel', function (e) {
       e.preventDefault();
+      self._tween = null;
       var rect = canvas.getBoundingClientRect();
-      var f = e.deltaY < 0 ? 1.15 : 1 / 1.15;
-      self.view.proj.zoomAt(f, e.clientX - rect.left, e.clientY - rect.top);
-      self.view.baseKey = '';
+      self.view.proj.zoomAt(e.deltaY < 0 ? 1.15 : 1 / 1.15,
+                            e.clientX - rect.left, e.clientY - rect.top);
+      self.view.baseKey = ''; self.view._subCache = null;
     }, { passive: false });
-
-    // 左の縦アイコン列: パネルの表示切替
-    function railToggle(btnId, key, panelId) {
-      el(btnId).addEventListener('click', function () {
-        self.panelOn[key] = !self.panelOn[key];
-        this.classList.toggle('active', self.panelOn[key]);
-        if (panelId) {
-          var show = self.panelOn[key] && !el(panelId).dataset.forceHidden;
-          el(panelId).classList.toggle('hidden', !show);
-        }
-      });
-    }
-    railToggle('rail-info', 'info', 'info-panel');
-    railToggle('rail-eew', 'eew', null);
-    railToggle('rail-tsunami', 'tsunami', null);
-    el('rail-sound').addEventListener('click', function () {
-      self.panelOn.sound = !self.panelOn.sound;
-      this.classList.toggle('active', self.panelOn.sound);
-      self.sound.setEnabled(self.panelOn.sound);
-      el('sound-toggle').checked = self.panelOn.sound;
-    });
-    el('rail-close').addEventListener('click', function () {
-      var any = self.panelOn.info || self.panelOn.eew || self.panelOn.wave;
-      self.panelOn.info = self.panelOn.eew = self.panelOn.wave = !any;
-      ['rail-info', 'rail-eew'].forEach(function (id) {
-        el(id).classList.toggle('active', !any);
-      });
-      el('info-panel').classList.toggle('hidden', any);
-      el('wave-strip').classList.toggle('hidden', any || self.phase !== 'monitor');
-      if (any) P.hideEEW();
-    });
-
-    // 観測点の表示スタイル (震度の数字入り / 色のみ)
-    function setStationStyle(style) {
-      self.view.stationStyle = style;
-      P.setLegendStyle(style);
-      try { localStorage.setItem('stationStyle', style); } catch (e) { /* 保存できなくても続行 */ }
-    }
-    el('style-number').addEventListener('click', function () { setStationStyle('number'); });
-    el('style-color').addEventListener('click', function () { setStationStyle('color'); });
-    var saved = null;
-    try { saved = localStorage.getItem('stationStyle'); } catch (e) { saved = null; }
-    setStationStyle(saved === 'color' ? 'color' : 'number');
-
-    // ズーム操作
-    el('zoom-in').addEventListener('click', function () {
-      self.view.proj.zoomAt(1.4, self.view.cssWidth / 2, self.view.cssHeight / 2);
-      self.view.baseKey = '';
-    });
-    el('zoom-out').addEventListener('click', function () {
-      self.view.proj.zoomAt(1 / 1.4, self.view.cssWidth / 2, self.view.cssHeight / 2);
-      self.view.baseKey = '';
-    });
-    el('zoom-fit').addEventListener('click', function () {
-      if (self.current) {
-        var mag = self.current.source.magnitude;
-        var span = U.clamp(1.2 + (mag - 5) * 0.9, 1.2, 9);
-        self.view.proj.fitBounds(
-          self.current.source.lat - span, self.current.source.lon - span * 1.1,
-          self.current.source.lat + span, self.current.source.lon + span * 1.1
-        );
-      } else {
-        self.view.proj.fitBounds(30.0, 128.0, 45.5, 146.0);
-      }
-      self.view.baseKey = '';
-    });
 
     global.addEventListener('resize', function () { self.view.resize(); });
     global.addEventListener('keydown', function (e) {
@@ -935,7 +897,7 @@
   App.randomize = function () {
     var regions = this.regions.list.filter(function (r) { return r.type === 'sea' || r.stations > 4; });
     var r = regions[Math.floor(Math.random() * regions.length)];
-    var mag = Math.round((5.5 + Math.random() * 3.0) * 10) / 10;
+    var mag = Math.round((5.5 + Math.random() * 3.2) * 10) / 10;
     var depth = Math.round(5 + Math.random() * 60);
     el('cfg-lat').value = (r.lat + (Math.random() - 0.5) * 0.4).toFixed(2);
     el('cfg-lon').value = (r.lon + (Math.random() - 0.5) * 0.4).toFixed(2);
@@ -959,14 +921,11 @@
       el('loading').classList.add('hidden');
       self.bind();
       self.refreshLists();
+      self.setDrill(true);
       self.view.proj.fitBounds(30.0, 128.0, 45.5, 146.0);
       self.setMode('visual');
-      if (self.scenarioIndex.length) {
-        self.loadScenario(self.scenarioIndex[0]);
-      } else {
-        // 計算済みシナリオが無いときは、既定の地震をその場で計算して再生する
-        self.runDefault();
-      }
+      if (self.scenarioIndex.length) self.loadScenario(self.scenarioIndex[0]);
+      else self.runDefault();
       self.lastFrame = performance.now();
       requestAnimationFrame(function (ts) { self.tick(ts); });
     }).catch(function (e) {
