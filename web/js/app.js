@@ -371,6 +371,7 @@
     if (this.playing) {
       this.sound.unlock();
       if (!this.sound.slotsReady) this.sound.loadSlots();
+      this.sound.loadVoice();
     }
     this.lastFrame = performance.now();
   };
@@ -483,7 +484,8 @@
     this.sound.info();
     this.sound.announceQuake({
       region: cur.source.region, shindo: cur.source.maxShindo,
-      magnitude: cur.source.magnitude, depth: cur.source.depth
+      magnitude: cur.source.magnitude, depth: cur.source.depth,
+      noTsunami: !cur.tsunami
     });
     this.scheduleAftershocks();
   };

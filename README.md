@@ -265,7 +265,17 @@ python -m pytest tests/ -q
 `web/sounds/` に置き、`manifest.json` で対応づける（`web/sounds/README.md`）。
 このディレクトリは Git の管理対象外で、リポジトリには合成音の生成コードのみが入る。
 
-音声案内はブラウザ内蔵の音声合成（Web Speech API）を使う。
+地震情報と津波予報の読み上げは、`web/sounds/voice/` に置いた短いクリップを
+つなげて再生する。クリップは Gemini の TTS で生成する。
+
+```bash
+export GEMINI_API_KEY=...
+python tools/generate_voice.py --scope core   # 定型句・震度・数値のみ (129 件)
+python tools/generate_voice.py                # 震央地名・津波予報区も含む (489 件)
+```
+
+クリップが無いときはブラウザ内蔵の音声合成（Web Speech API）にフォールバックする。
+生成した音声も Git の管理対象外。
 
 ## 構成
 
@@ -295,11 +305,13 @@ tools/                データ生成
   build_all.py        上記をまとめて実行
   calibrate.py        経路パラメータの較正
   build_bundle.py     単一 HTML へのバンドル
+  generate_voice.py   Gemini TTS で読み上げクリップを生成
 
 web/                  地震モニタ
   js/mapview.js       地図・観測点・波面の描画
   js/engine.js        ブラウザ内シミュレーション
   js/app.js           モード切替・再生・全体制御
+  js/sound.js         効果音の合成とクリップ読み上げ
 
 scenarios/            シナリオ定義
 tests/                テスト
