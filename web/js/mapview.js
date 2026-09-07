@@ -142,13 +142,15 @@
   };
 
   /* ---------------- 観測点 ---------------- */
-  /* まだ揺れていない観測点。値に応じて大きさと濃さを連続的に落とし、
-   * 波面のところで見た目が途切れないようにする。 */
-  var QUIET_TIERS = 6;
-  var QUIET_RGB = '138, 162, 190';
+  /* 震度 0 に届かない観測点。数字は出さないが、リアルタイム震度の配色で
+   * 塗って観測点網が常に見えるようにする。値に応じて大きさを変えることで、
+   * 波面のところで見た目が急に切り替わらない。 */
+  var QUIET_TIERS = 8;
+  var QUIET_LO = -3.0, QUIET_HI = -0.5;
 
   function quietTier(v) {
-    return global.Util.clamp(Math.floor((v + 3.0) / 2.5 * QUIET_TIERS), 0, QUIET_TIERS - 1);
+    var t = (v - QUIET_LO) / (QUIET_HI - QUIET_LO) * QUIET_TIERS;
+    return global.Util.clamp(Math.floor(t), 0, QUIET_TIERS - 1);
   }
 
   function drawQuiet(ctx, tiers, radius, minRadius) {
@@ -156,13 +158,13 @@
       var list = tiers[t];
       if (!list) continue;
       var frac = (t + 0.5) / QUIET_TIERS;
-      var r = Math.max(radius * (0.34 + 0.40 * frac), minRadius);
+      var r = Math.max(radius * (0.40 + 0.38 * frac), minRadius);
       var path = new Path2D();
       for (var i = 0; i < list.length; i++) {
         path.moveTo(list[i][0] + r, list[i][1]);
         path.arc(list[i][0], list[i][1], r, 0, Math.PI * 2);
       }
-      ctx.fillStyle = 'rgba(' + QUIET_RGB + ', ' + (0.42 + 0.30 * frac).toFixed(3) + ')';
+      ctx.fillStyle = global.Util.realtimeCSS(QUIET_LO + (QUIET_HI - QUIET_LO) * frac);
       ctx.fill(path);
     }
   }
@@ -250,20 +252,14 @@
     var margin = 20;
     var BUCKETS = 48, lo = -3.0, hi = 7.0;
     var paths = new Array(BUCKETS);
-    var quiet = new Array(QUIET_TIERS);
     var i, b;
 
+    // 揺れていない観測点も含め、全点を同じ大きさの色の円で塗る
     for (i = 0; i < n; i++) {
       var v = values ? values[i] : -3;
       var pt = p.project(lat[i], lon[i]);
       if (pt[0] < -margin || pt[0] > this.cssWidth + margin ||
           pt[1] < -margin || pt[1] > this.cssHeight + margin) continue;
-      // まだ揺れていない観測点は、数字の円のときと同じ静かな点で描く
-      if (v < -0.5) {
-        var q = quietTier(v);
-        (quiet[q] || (quiet[q] = [])).push(pt);
-        continue;
-      }
       b = Math.round((U.clamp(v, lo, hi) - lo) / (hi - lo) * (BUCKETS - 1));
       if (!paths[b]) paths[b] = new Path2D();
       paths[b].moveTo(pt[0] + radius, pt[1]);
@@ -271,8 +267,6 @@
     }
 
     ctx.save();
-    // 色の円は間引かずに全点描くので、静かな点は小さめにして地図を潰さない
-    drawQuiet(ctx, quiet, radius, 1.2);
     for (b = 0; b < BUCKETS; b++) {
       if (!paths[b]) continue;
       var val = lo + (hi - lo) * b / (BUCKETS - 1);

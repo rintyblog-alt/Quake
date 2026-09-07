@@ -568,15 +568,11 @@
                            this.waveRadius('S', cur.source.depth, this.t));
         }
         if (cur.rupture) v.drawRupture(cur.rupture, this.t);
+        // 表示の切り替え (色のみ / 震度つき) は凡例のスイッチに従う。
+        // 検知の段階でも同じで、囲みの四角だけを足す。
+        v.drawStations(vals);
         if (this.phase === 'detect') {
-          // 検知の段階は震度の数字を出さず、色の反応だけを見せる
-          var saved = v.stationStyle;
-          v.stationStyle = 'color';
-          v.drawStations(vals);
-          v.stationStyle = saved;
           v.drawDetectionBox(this.detectionBox(vals), this.t);
-        } else {
-          v.drawStations(vals);
         }
       }
 
@@ -851,6 +847,7 @@
       self.view.stationStyle = style;
       P.setLegendStyle(style);
       try { localStorage.setItem('stationStyle', style); } catch (e) { /* 保存できなくても続行 */ }
+      self.draw();  // 停止中に切り替えても反映されるように
     }
     el('style-number').addEventListener('click', function () { setStationStyle('number'); });
     el('style-color').addEventListener('click', function () { setStationStyle('color'); });
