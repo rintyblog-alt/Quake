@@ -595,43 +595,56 @@
 
   /* ---------------- 検知の演出 ----------------
    * 揺れを検出した観測点を囲む四角を描き、広がっていく様子を見せる。 */
-  MapView.prototype.drawDetectionBox = function (box, phase) {
-    if (!box) return;
+  /* 揺れている範囲の囲み。塊ごとに 1 つ描き、
+   * 弱い反応は緑、強い反応は黄にする。 */
+  var BOX_WEAK = '80, 220, 120';
+  var BOX_STRONG = '255, 213, 74';
+
+  MapView.prototype.drawDetectionBoxes = function (boxes, phase, label) {
+    if (!boxes || !boxes.length) return;
     var ctx = this.ctx, p = this.proj;
-    var a = p.project(box.latMax, box.lonMin);
-    var b = p.project(box.latMin, box.lonMax);
-    var x = Math.min(a[0], b[0]), y = Math.min(a[1], b[1]);
-    var w = Math.abs(b[0] - a[0]), h = Math.abs(b[1] - a[1]);
-    var pad = 14 + 10 * Math.sin(phase * 4.0);
-    x -= pad; y -= pad; w += pad * 2; h += pad * 2;
-
+    var margin = 30;
     ctx.save();
-    ctx.strokeStyle = 'rgba(255, 213, 74, 0.95)';
-    ctx.lineWidth = 2.2;
-    ctx.setLineDash([10, 6]);
-    ctx.lineDashOffset = -phase * 26;
-    ctx.strokeRect(x, y, w, h);
+    ctx.lineJoin = 'miter';
+    for (var i = 0; i < boxes.length; i++) {
+      var box = boxes[i];
+      var a = p.project(box.latMax, box.lonMin);
+      var b = p.project(box.latMin, box.lonMax);
+      var x = Math.min(a[0], b[0]), y = Math.min(a[1], b[1]);
+      var w = Math.abs(b[0] - a[0]), h = Math.abs(b[1] - a[1]);
+      if (x > this.cssWidth + margin || y > this.cssHeight + margin ||
+          x + w < -margin || y + h < -margin) continue;
+      var pad = 5;
+      x -= pad; y -= pad; w += pad * 2; h += pad * 2;
 
-    // 四隅を実線で強調する
-    ctx.setLineDash([]);
-    ctx.lineWidth = 3.4;
-    var c = Math.min(24, w / 3, h / 3);
-    var corners = [[x, y, 1, 1], [x + w, y, -1, 1], [x, y + h, 1, -1], [x + w, y + h, -1, -1]];
-    for (var i = 0; i < corners.length; i++) {
-      var q = corners[i];
-      ctx.beginPath();
-      ctx.moveTo(q[0] + q[2] * c, q[1]);
-      ctx.lineTo(q[0], q[1]);
-      ctx.lineTo(q[0], q[1] + q[3] * c);
-      ctx.stroke();
+      var rgb = box.strong ? BOX_STRONG : BOX_WEAK;
+      ctx.strokeStyle = 'rgba(' + rgb + ', 0.95)';
+      ctx.lineWidth = box.strong ? 2.0 : 1.5;
+      ctx.strokeRect(x, y, w, h);
+
+      // いちばん強い塊だけ、四隅を太くして目立たせる
+      if (i === 0 && box.strong) {
+        ctx.lineWidth = 3.2;
+        var c = Math.min(18, w / 3, h / 3);
+        var corners = [[x, y, 1, 1], [x + w, y, -1, 1], [x, y + h, 1, -1], [x + w, y + h, -1, -1]];
+        for (var k = 0; k < corners.length; k++) {
+          var q = corners[k];
+          ctx.beginPath();
+          ctx.moveTo(q[0] + q[2] * c, q[1]);
+          ctx.lineTo(q[0], q[1]);
+          ctx.lineTo(q[0], q[1] + q[3] * c);
+          ctx.stroke();
+        }
+      }
+
+      if (label && i === 0) {
+        ctx.fillStyle = 'rgba(' + rgb + ', 0.95)';
+        ctx.font = '700 13px "Hiragino Sans", system-ui, sans-serif';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'bottom';
+        ctx.fillText('揺れを検出', x + 2, y - 5);
+      }
     }
-
-    ctx.setLineDash([]);
-    ctx.fillStyle = 'rgba(255, 213, 74, 0.95)';
-    ctx.font = '700 13px "Hiragino Sans", system-ui, sans-serif';
-    ctx.textAlign = 'left';
-    ctx.textBaseline = 'bottom';
-    ctx.fillText('揺れを検出', x + 2, y - 5);
     ctx.restore();
   };
 

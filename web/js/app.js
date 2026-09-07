@@ -344,18 +344,57 @@
   };
 
   /* 揺れを検出している観測点の範囲 */
-  App.detectionBox = function (values) {
-    var st = this.stations;
-    var latMin = 1e9, latMax = -1e9, lonMin = 1e9, lonMax = -1e9, any = false;
+  /* ---------------- 揺れている範囲の囲み ----------------
+   * 反応した観測点を細分区域ごとにまとめ、区域ごとに矩形で囲む。
+   * 揺れが広がるにつれて囲みが増えていき、強くなった区域は黄に変わる。
+   */
+  var BOX_REACT_GAL = 0.2;    // これを超えた観測点を「反応した」とみなす
+  var BOX_STRONG_GAL = 2.0;   // これを超える区域は黄、それ以下は緑
+  var BOX_MAX_STRONG = 16;    // 黄の上限
+  var BOX_MAX_WEAK = 10;      // 緑の上限 (強い区域だけで埋まらないよう別枠にする)
+  var BOX_MIN_POINTS = 2;     // 1 点だけの反応では囲まない
+
+  App.detectionBoxes = function (values) {
+    var st = this.stations, area = this.stationArea;
+    var found = {}, keys = [];
     for (var i = 0; i < values.length; i++) {
-      if (values[i] < -0.5) continue;
-      any = true;
-      if (st.lat[i] < latMin) latMin = st.lat[i];
-      if (st.lat[i] > latMax) latMax = st.lat[i];
-      if (st.lon[i] < lonMin) lonMin = st.lon[i];
-      if (st.lon[i] > lonMax) lonMax = st.lon[i];
+      var gal = U.pgaFromIntensity(values[i]);
+      if (gal < BOX_REACT_GAL) continue;
+      var a = area[i];
+      if (a < 0) continue;
+      var box = found[a];
+      if (!box) {
+        box = found[a] = {
+          latMin: st.lat[i], latMax: st.lat[i],
+          lonMin: st.lon[i], lonMax: st.lon[i], gal: gal, n: 1
+        };
+        keys.push(a);
+        continue;
+      }
+      box.n++;
+      if (gal > box.gal) box.gal = gal;
+      if (st.lat[i] < box.latMin) box.latMin = st.lat[i];
+      if (st.lat[i] > box.latMax) box.latMax = st.lat[i];
+      if (st.lon[i] < box.lonMin) box.lonMin = st.lon[i];
+      if (st.lon[i] > box.lonMax) box.lonMax = st.lon[i];
     }
-    return any ? { latMin: latMin, latMax: latMax, lonMin: lonMin, lonMax: lonMax } : null;
+
+    var out = [];
+    for (var k = 0; k < keys.length; k++) {
+      var b = found[keys[k]];
+      if (b.n < BOX_MIN_POINTS) continue;
+      b.strong = b.gal >= BOX_STRONG_GAL;
+      out.push(b);
+    }
+    // 揺れの強い区域から出す。緑と黄で別に上限を設け、
+    // 強い区域だけで埋まって外側の弱い反応が消えないようにする。
+    out.sort(function (x, y) { return y.gal - x.gal; });
+    var strong = [], weak = [];
+    for (var j = 0; j < out.length; j++) {
+      if (out[j].strong) { if (strong.length < BOX_MAX_STRONG) strong.push(out[j]); }
+      else if (weak.length < BOX_MAX_WEAK) weak.push(out[j]);
+    }
+    return strong.concat(weak);
   };
 
   /* ---------------- 履歴 ---------------- */
@@ -565,7 +604,12 @@
       magnitude: cur.source.magnitude, depth: cur.source.depth,
       noTsunami: !cur.tsunami
     });
-    this.scheduleAftershocks();
+    // 余震は、この再生が終わってから次に進める (重ならないように)
+    this.collectAftershocks();
+    if (this.aftershockQueue) {
+      this.queueNextAftershock(
+        this.aftershockQueue.index === 0 ? AFTERSHOCK_FIRST_WAIT : AFTERSHOCK_GAP);
+    }
   };
 
   /* 地震情報の発表時刻 [s]。気象庁の順序に合わせ、
@@ -592,26 +636,56 @@
     this.showInfo(3);
   };
 
-  App.scheduleAftershocks = function () {
+  /* ---------------- 余震の再生 ----------------
+   * 一定間隔で次を始めると、前の余震の再生が終わらないうちに上書きされる。
+   * 再生が終わってから次に進める。
+   */
+  var AFTERSHOCK_MIN_INTENSITY = 2.5;   // 震度 3 以上のものだけ再生する
+  var AFTERSHOCK_MAX = 5;
+  var AFTERSHOCK_FIRST_WAIT = 9000;
+  var AFTERSHOCK_GAP = 6000;
+
+  /* 本震の再生が終わったところで、再生する余震の列を作る */
+  App.collectAftershocks = function () {
     var cur = this.current;
+    if (this.aftershockQueue) return;              // 余震の再生中は作り直さない
     if (!cur.aftershocks || !cur.aftershocks.length) return;
-    var notable = cur.aftershocks.filter(function (a) { return a.maxIntensity >= 1.5; }).slice(0, 8);
+    var notable = cur.aftershocks
+      .filter(function (a) { return a.maxIntensity >= AFTERSHOCK_MIN_INTENSITY; })
+      .slice(0, AFTERSHOCK_MAX);
     if (!notable.length) return;
-    var self = this, i = 0;
+    this.aftershockQueue = {
+      list: notable, index: 0,
+      origin: cur.originDate, kind: cur.source.kind
+    };
     P.toast('余震活動を再生します（' + notable.length + '回）');
-    function next() {
-      if (i >= notable.length || self._abortAftershocks) return;
-      var a = notable[i++];
-      var when = new Date(cur.originDate.getTime() + a.time * 1000);
-      var res = self.engine.simulate({
-        lat: a.lat, lon: a.lon, depth: a.depth, magnitude: a.magnitude,
-        kind: cur.source.kind, strike: 0, dip: 45, rake: 90
-      }, { duration: 120, aftershocks: false, tsunami: false, seed: 900 + i });
-      self.adoptEngineResult(res, '余震 ' + a.region + ' ' + U.formatMagnitude(a.magnitude), when);
-      self.play(true);
-      setTimeout(next, 11000);
-    }
-    setTimeout(next, 9000);
+  };
+
+  App.queueNextAftershock = function (delay) {
+    var self = this;
+    if (this._aftershockTimer) clearTimeout(this._aftershockTimer);
+    this._aftershockTimer = setTimeout(function () { self.playNextAftershock(); }, delay);
+  };
+
+  App.playNextAftershock = function () {
+    var q = this.aftershockQueue;
+    if (!q || this._abortAftershocks) { this.aftershockQueue = null; return; }
+    if (q.index >= q.list.length) { this.aftershockQueue = null; return; }
+    var a = q.list[q.index++];
+    var res = this.engine.simulate({
+      lat: a.lat, lon: a.lon, depth: a.depth, magnitude: a.magnitude,
+      kind: q.kind, strike: 0, dip: 45, rake: 90
+    }, { duration: 120, aftershocks: false, tsunami: false, seed: 900 + q.index });
+    this.adoptEngineResult(res, '余震 ' + a.region + ' ' + U.formatMagnitude(a.magnitude),
+                           new Date(q.origin.getTime() + a.time * 1000));
+    this.play(true);
+  };
+
+  App.cancelAftershocks = function () {
+    this._abortAftershocks = true;
+    this.aftershockQueue = null;
+    if (this._aftershockTimer) clearTimeout(this._aftershockTimer);
+    this._aftershockTimer = null;
   };
 
   /* ---------------- 描画 ---------------- */
@@ -639,9 +713,8 @@
         // 表示の切り替え (色のみ / 震度つき) は凡例のスイッチに従う。
         // 検知の段階でも同じで、囲みの四角だけを足す。
         v.drawStations(vals);
-        if (this.phase === 'detect') {
-          v.drawDetectionBox(this.detectionBox(vals), this.t);
-        }
+        // 揺れている範囲の囲み。広がるあいだずっと出す。
+        v.drawDetectionBoxes(this.detectionBoxes(vals), this.t, this.phase === 'detect');
       }
 
       v.drawEpicenter(cur.source.lat, cur.source.lon,
@@ -774,6 +847,7 @@
         duration: 260, aftershocks: c.aftershocks, tsunami: c.tsunami,
         eew: c.eew, aftershockDays: 3, seed: Date.now() & 0xffff
       });
+      self.cancelAftershocks();
       self._abortAftershocks = false;
       self.setDrill(c.drill);
       self.adoptEngineResult(res, res.source.region + ' ' + U.formatMagnitude(c.magnitude), c.origin);
@@ -803,6 +877,7 @@
     var self = this;
     P.toast('シナリオを読み込み中…');
     fetchJSON('data/scenarios/' + entry.file).then(function (payload) {
+      self.cancelAftershocks();
       self._abortAftershocks = false;
       self.adoptScenario(payload);
       self.setMode('visual');
