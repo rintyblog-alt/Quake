@@ -85,14 +85,30 @@
       });
   };
 
+  /* data URI をその場で ArrayBuffer に開く.
+   *
+   * 単一 HTML の音源は data URI で埋め込んであるが、これを fetch() で読むと
+   * connect-src を絞ったページ (Artifact など) で通信とみなされて弾かれ、
+   * 音源が 1 つも読めずに合成音へ落ちてしまう。通信を挟まずに開く。 */
+  function dataUriToBuffer(uri) {
+    var comma = uri.indexOf(',');
+    if (comma < 0 || uri.slice(0, comma).indexOf(';base64') < 0) return null;
+    var bin = atob(uri.slice(comma + 1));
+    var out = new Uint8Array(bin.length);
+    for (var i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out.buffer;
+  }
+
   Sound.prototype.tryLoad = function (slot, candidates) {
     var self = this;
     var i = 0;
     function attempt() {
       if (i >= candidates.length) return Promise.resolve();
       var url = candidates[i++];
-      return fetch(url, { cache: 'force-cache' })
-        .then(function (r) { return r.ok ? r.arrayBuffer() : Promise.reject(); })
+      var direct = url.slice(0, 5) === 'data:' ? dataUriToBuffer(url) : null;
+      return (direct ? Promise.resolve(direct)
+                     : fetch(url, { cache: 'force-cache' })
+                         .then(function (r) { return r.ok ? r.arrayBuffer() : Promise.reject(); }))
         .then(function (buf) {
           return new Promise(function (resolve, reject) {
             self.ctx.decodeAudioData(buf, resolve, reject);
