@@ -228,6 +228,9 @@
     this.firedTsunami = false;
     this.detectLevel = 0;
     this.infoStage = 0;
+    this.followBoxes = true;
+    this.boxSpan = 0;
+    this.boxQuietAt = null;
     this.phase = 'detect';
     this._tween = null;
     if (this.sound) this.sound.cancelSpeech();
@@ -279,6 +282,55 @@
       from: { lat: p.centerLat, lon: p.centerLon, zoom: p.zoom },
       to: to, elapsed: 0, dur: seconds
     };
+  };
+
+  /* ---------------- 検知した範囲への追従 ----------------
+   * 囲みが出たらその範囲を映し、広がるあいだは追いかける。
+   * 広がらなくなったら元のズームへ戻す。
+   */
+  var FOLLOW_PAD = 1.55;        // 囲みの外に取る余白
+  var FOLLOW_GROW = 1.12;       // これだけ広がったら映し直す
+  var FOLLOW_RETURN_S = 12;     // 広がらなくなってから戻すまで [シナリオ内の秒]
+  var FOLLOW_MOVE_S = 1.6;      // 映し直すのにかける時間 [実時間の秒]
+  var FOLLOW_GIVEUP_S = 40;     // どこも反応しないまま経ったら戻す [シナリオ内の秒]
+
+  App.followDetection = function (boxes) {
+    if (!this.followBoxes || !this.current || this.phase === 'final') return;
+
+    if (!boxes.length) {
+      // どこも反応しないまま時間が経ったら、寄ったままにせず元のズームへ戻す
+      this.boxSpan = 0;
+      if (this.t > FOLLOW_GIVEUP_S) {
+        this.followBoxes = false;
+        this.tweenView(this.wideView, 2.0);
+      }
+      return;
+    }
+
+    var latMin = 1e9, latMax = -1e9, lonMin = 1e9, lonMax = -1e9;
+    for (var i = 0; i < boxes.length; i++) {
+      var b = boxes[i];
+      if (b.latMin < latMin) latMin = b.latMin;
+      if (b.latMax > latMax) latMax = b.latMax;
+      if (b.lonMin < lonMin) lonMin = b.lonMin;
+      if (b.lonMax > lonMax) lonMax = b.lonMax;
+    }
+    var span = Math.max((latMax - latMin) / 2, (lonMax - lonMin) / 2 / 1.15) * FOLLOW_PAD;
+    span = U.clamp(span, 0.7, this.wideView.span);
+
+    if (span > (this.boxSpan || 0) * FOLLOW_GROW || !this.boxSpan) {
+      // 広がったので映し直す
+      this.boxSpan = span;
+      this.boxQuietAt = this.t;
+      this.tweenView({ lat: (latMin + latMax) / 2, lon: (lonMin + lonMax) / 2, span: span },
+                     FOLLOW_MOVE_S);
+      return;
+    }
+    // しばらく広がっていなければ元のズームへ戻す
+    if (this.boxQuietAt != null && this.t - this.boxQuietAt > FOLLOW_RETURN_S) {
+      this.followBoxes = false;
+      this.tweenView(this.wideView, 2.0);
+    }
   };
 
   App.stepTween = function (dt) {
@@ -458,6 +510,9 @@
     var atEnd = k >= cur.nt - 1;
     this.phase = atEnd ? 'final' : (this.t < first ? 'detect' : 'monitor');
 
+    this.boxSpan = 0;
+    this.boxQuietAt = null;
+
     // 巻き戻し・早送りで鳴り直さないよう、今の時刻の段階まで進めておく
     this.infoStage = 0;
     while (this.infoStage < INFO_TIMES.length && this.t >= INFO_TIMES[this.infoStage]) this.infoStage++;
@@ -550,7 +605,6 @@
       if (this.firedReports === 0) {
         // 検知の演出から緊急地震速報の画面へ移る
         this.phase = 'monitor';
-        this.tweenView(this.wideView, 1.4);
         if (r.kind === '警報') this.sound.warning(); else this.sound.forecast();
         this.sound.announceEEW(r);
       } else {
@@ -714,7 +768,9 @@
         // 検知の段階でも同じで、囲みの四角だけを足す。
         v.drawStations(vals);
         // 揺れている範囲の囲み。広がるあいだずっと出す。
-        v.drawDetectionBoxes(this.detectionBoxes(vals), this.t, this.phase === 'detect');
+        var boxes = this.detectionBoxes(vals);
+        v.drawDetectionBoxes(boxes, this.t, this.phase === 'detect');
+        this.followDetection(boxes);
       }
 
       v.drawEpicenter(cur.source.lat, cur.source.lon,
@@ -1000,16 +1056,19 @@
 
     el('zoom-in').addEventListener('click', function () {
       self._tween = null;
+      self.followBoxes = false;
       self.view.proj.zoomAt(1.4, self.view.cssWidth / 2, self.view.cssHeight / 2);
       self.view.baseKey = ''; self.view._subCache = null;
     });
     el('zoom-out').addEventListener('click', function () {
       self._tween = null;
+      self.followBoxes = false;
       self.view.proj.zoomAt(1 / 1.4, self.view.cssWidth / 2, self.view.cssHeight / 2);
       self.view.baseKey = ''; self.view._subCache = null;
     });
     el('zoom-fit').addEventListener('click', function () {
       self._tween = null;
+      self.followBoxes = false;
       if (self.current) self.applyView(self.wideView);
       else { self.view.proj.fitBounds(30.0, 128.0, 45.5, 146.0); self.view.baseKey = ''; }
       self.view._subCache = null;
@@ -1021,6 +1080,7 @@
       canvas.setPointerCapture(e.pointerId);
       canvas.classList.add('dragging');
       self._tween = null;
+      self.followBoxes = false;
       self.sound.unlock();
     });
     canvas.addEventListener('pointermove', function (e) {
@@ -1045,6 +1105,7 @@
     canvas.addEventListener('wheel', function (e) {
       e.preventDefault();
       self._tween = null;
+      self.followBoxes = false;
       var rect = canvas.getBoundingClientRect();
       self.view.proj.zoomAt(e.deltaY < 0 ? 1.15 : 1 / 1.15,
                             e.clientX - rect.left, e.clientY - rect.top);
