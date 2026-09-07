@@ -37,6 +37,26 @@ BASE_DATA = [
 BASE_IMAGES = [("data/bathymetry.jpg", "image/jpeg")]
 
 
+def thin_timeline(payload: dict, stride: int) -> None:
+    """リアルタイム震度の時系列を間引く.
+
+    観測点数 x 時刻数の配列がバンドルの大半を占める。表示側は時刻を指定して
+    前後のコマを線形に補間して読むので、間引いても動きは滑らかなまま軽くできる。
+    """
+    if stride <= 1:
+        return
+    st = payload["stations"]
+    ns, nt = st["count"], payload["timeline"]["count"]
+    rt = np.frombuffer(base64.b64decode(st["realtime"]), dtype=np.int8).reshape(ns, nt)
+    keep = list(range(0, nt, stride))
+    if keep[-1] != nt - 1:
+        keep.append(nt - 1)          # 最後のコマは必ず残す
+    thinned = np.ascontiguousarray(rt[:, keep])
+    st["realtime"] = base64.b64encode(thinned.tobytes()).decode("ascii")
+    payload["timeline"]["count"] = len(keep)
+    payload["timeline"]["dt"] = payload["timeline"]["dt"] * stride
+
+
 def embed_sounds(bundle: dict) -> None:
     """差し替え音源を data URI で埋め込む.
 
@@ -102,6 +122,9 @@ def main() -> int:
                     help="埋め込むシナリオ名 (拡張子なし)。none で無し")
     ap.add_argument("--fragment", action="store_true",
                     help="html/head/body を外し、埋め込み用の断片として出力する")
+    ap.add_argument("--timeline-stride", type=int, default=1,
+                    help="リアルタイム震度の時系列を何コマに 1 つへ間引くか "
+                         "(表示は補間するので滑らかなまま。バンドルを軽くするため)")
     ap.add_argument("--sounds", action="store_true",
                     help="web/sounds/ の差し替え音源も埋め込む (手元で使う分だけ)")
     args = ap.parse_args()
@@ -137,7 +160,9 @@ def main() -> int:
             if not f.exists():
                 print(f"  [警告] シナリオが見つかりません: {name}")
                 continue
-            bundle[f"data/scenarios/{name}.json"] = json.loads(f.read_text(encoding="utf-8"))
+            payload = json.loads(f.read_text(encoding="utf-8"))
+            thin_timeline(payload, args.timeline_stride)
+            bundle[f"data/scenarios/{name}.json"] = payload
             for e in all_entries:
                 if e["file"] == f"{name}.json":
                     entries.append(e)

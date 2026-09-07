@@ -178,6 +178,7 @@
     var s = payload.stations, self = this;
     var rt = U.decodeInt8(s.realtime), fin = U.decodeInt8(s.final);
     var scale = s.scale || 10, nt = payload.timeline.count, ns = s.count;
+    var dt = payload.timeline.dt;
 
     function decodeScaled(b64, div) {
       var a = U.decodeInt16(b64), o = new Float32Array(ns);
@@ -191,10 +192,24 @@
       title: payload.meta.name,
       source: payload.source,
       originDate: new Date(payload.meta.originTime),
-      nt: nt, dt: payload.timeline.dt, ns: ns,
+      nt: nt, dt: dt, ns: ns,
       getValues: function (k) {
         var out = self.scratch;
         for (var j = 0; j < ns; j++) out[j] = rt[j * nt + k] / scale;
+        return out;
+      },
+      /* 時刻を指定して読む。刻みの間は線形に補間するので、
+       * 時系列を間引いたデータでも表示は滑らかになる。 */
+      valuesAt: function (t) {
+        var x = t / dt;
+        var k0 = Math.max(0, Math.min(Math.floor(x), nt - 1));
+        var k1 = Math.min(k0 + 1, nt - 1);
+        var w = x - k0;
+        var out = self.scratch;
+        for (var j = 0; j < ns; j++) {
+          var a = rt[j * nt + k0], b = rt[j * nt + k1];
+          out[j] = (a + (b - a) * w) / scale;
+        }
         return out;
       },
       final: finals,
@@ -208,12 +223,25 @@
 
   App.adoptEngineResult = function (res, title, originDate) {
     var ns = this.stations.count, nt = res.timeline.count, rt = res.realtime, self = this;
+    var dt = res.timeline.dt;
     this.setCurrent({
       title: title, source: res.source, originDate: originDate || new Date(),
-      nt: nt, dt: res.timeline.dt, ns: ns,
+      nt: nt, dt: dt, ns: ns,
       getValues: function (k) {
         var out = self.scratch;
         for (var i = 0; i < ns; i++) out[i] = rt[i * nt + k];
+        return out;
+      },
+      valuesAt: function (t) {
+        var x = t / dt;
+        var k0 = Math.max(0, Math.min(Math.floor(x), nt - 1));
+        var k1 = Math.min(k0 + 1, nt - 1);
+        var w = x - k0;
+        var out = self.scratch;
+        for (var i = 0; i < ns; i++) {
+          var a = rt[i * nt + k0], b = rt[i * nt + k1];
+          out[i] = a + (b - a) * w;
+        }
         return out;
       },
       final: res.final, tp: res.tp, ts: res.ts, rupture: null,
@@ -591,8 +619,7 @@
   App.peakIntensity = function () {
     var cur = this.current;
     if (!cur) return -3;
-    var k = Math.max(0, Math.min(Math.round(this.t / cur.dt), cur.nt - 1));
-    var vals = cur.getValues(k), mx = -3;
+    var vals = cur.valuesAt(this.t), mx = -3;
     for (var i = 0; i < vals.length; i++) if (vals[i] > mx) mx = vals[i];
     return mx;
   };
@@ -749,7 +776,7 @@
 
     if (cur) {
       var k = U.clamp(Math.round(this.t / cur.dt), 0, cur.nt - 1);
-      var vals = cur.getValues(k);
+      var vals = cur.valuesAt(this.t);
 
       if (this.phase === 'final') {
         v.drawObservedSubdivisions(this.areaIntensity);
@@ -1112,7 +1139,20 @@
       self.view.baseKey = ''; self.view._subCache = null;
     }, { passive: false });
 
+    // スマートフォンではパネルを下からのシートにしている。開閉できるようにする。
+    var toggle = el('sheet-toggle');
+    if (toggle) {
+      toggle.addEventListener('click', function () {
+        el('app').classList.toggle('sheet-collapsed');
+        // 地図の高さが変わるので、遷移が終わってから測り直す
+        setTimeout(function () { self.view.resize(); self.draw(); }, 240);
+      });
+    }
+
     global.addEventListener('resize', function () { self.view.resize(); });
+    global.addEventListener('orientationchange', function () {
+      setTimeout(function () { self.view.resize(); self.draw(); }, 250);
+    });
     global.addEventListener('keydown', function (e) {
       if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
       if (e.code === 'Space') { e.preventDefault(); self.play(); }

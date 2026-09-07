@@ -1,0 +1,18 @@
+{
+ "name": "小笠原諸島西方沖の深発地震",
+ "lat": 27.86,
+ "lon": 140.68,
+ "depth_km": 682.0,
+ "magnitude": 8.1,
+ "kind": "intraslab",
+ "strike": 190.0,
+ "dip": 70.0,
+ "rake": -90.0,
+ "timeline_seconds": 420.0,
+ "with_aftershocks": true,
+ "aftershock_days": 3.0,
+ "with_tsunami": false,
+ "max_distance_km": 2200.0,
+ "seed": 20260901,
+ "_comment": "小笠原諸島西方沖の深発地震 (2015年5月30日の地震を模したもの)。前弧側で異常震域が出る。"
+}

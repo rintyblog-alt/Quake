@@ -60,6 +60,87 @@ def si_midorikawa_pga(
     return 10.0**log_pga
 
 
+# 距離減衰式の magnitude 依存の補正 (下の関数を参照)
+_CORR_LENGTH_KM = 55.0
+_CORR_FAR = (-0.80, 0.45, -1.20, 0.08)    # 切片, 傾き, 下限, 上限 (基準 M5.0)
+_CORR_NEAR = (-0.50, 0.50, -0.50, 0.35)   # 同上 (基準 M4.5)
+
+
+def magnitude_distance_correction(mw: float, distance_km) -> np.ndarray:
+    """司・翠川 (1999) を波形合成に合わせる補正 [計測震度]。
+
+    司・翠川の式は遠方の減り方がマグニチュードによらない形をしている。
+    しかし実際には、小さい地震ほどコーナー周波数が高くて高周波が卓越し、
+    Q(f) による減衰が強く効くため、遠方では大きい地震より速く減る。
+
+    確率論的波形合成 (sim/stochastic.py) と距離減衰式の差を M4.5〜8.0 ・
+    10〜500 km で測り、次の形を当てはめた (残差 RMS 0.11 計測震度)。
+
+        Δ(M, r) = N(M) + (A(M) - N(M)) * (1 - exp(-r / 55km))
+
+    N は震源直上の差、A は遠方での差。どちらも M に対して直線で、
+    M7 あたりで頭打ちになる。M4.5 では遠方で -1.0 震度に達する。
+    """
+    r = np.maximum(np.asarray(distance_km, dtype=float), 0.0)
+    g = 1.0 - np.exp(-r / _CORR_LENGTH_KM)
+    b0, b1, lo, hi = _CORR_FAR
+    far = np.clip(b0 + b1 * (mw - 5.0), lo, hi)
+    b0, b1, lo, hi = _CORR_NEAR
+    near = np.clip(b0 + b1 * (mw - 4.5), lo, hi)
+    return near + (far - near) * g
+
+
+# 火山フロント (太平洋プレート側の島弧: 千島・東北・伊豆小笠原)。
+# 緯度に対して経度が単調なので、緯度から前線の経度を内挿して使う。
+VOLCANIC_FRONT = [
+    (45.4, 142.4), (43.7, 142.7), (42.7, 141.2), (41.5, 140.9), (40.7, 140.9),
+    (39.8, 141.0), (38.9, 140.7), (38.1, 140.4), (37.6, 140.3), (36.9, 139.5),
+    (36.4, 138.5), (35.9, 138.5), (35.4, 138.7), (34.7, 139.4), (34.1, 139.5),
+    (33.1, 139.8), (31.9, 139.9), (27.2, 140.9), (24.8, 141.3),
+]
+_VF_LAT = np.array([p[0] for p in VOLCANIC_FRONT][::-1])
+_VF_LON = np.array([p[1] for p in VOLCANIC_FRONT][::-1])
+
+SLAB_MIN_DEPTH_KM = 70.0    # ここから深いとスラブ内を伝わる成分が効き始める
+SLAB_FULL_DEPTH_KM = 150.0  # ここより深いと完全に効く
+SLAB_WIDTH_KM = 100.0       # 火山フロントをまたぐときの遷移の幅
+SLAB_Q_RECOVERY = 0.45      # 非弾性減衰のうち、前弧側で効かなくなる割合
+SLAB_MAX_BONUS = 2.5        # 効きすぎないよう頭打ちにする [計測震度]
+
+
+def fore_arc_weight(lat, lon) -> np.ndarray:
+    """前弧 (太平洋側) なら 1、背弧 (日本海側) なら 0 に近づく重み。"""
+    lat = np.asarray(lat, dtype=float)
+    lon = np.asarray(lon, dtype=float)
+    front_lon = np.interp(lat, _VF_LAT, _VF_LON)
+    east_km = (lon - front_lon) * 111.32 * np.cos(np.radians(lat))
+    return 0.5 + 0.5 * np.tanh(east_km / SLAB_WIDTH_KM)
+
+
+def slab_path_bonus(depth_km: float, distance_km, lat, lon) -> np.ndarray:
+    """深発地震の異常震域を表す項 [計測震度]。
+
+    沈み込む海洋プレートは冷たく Q が高いため、スラブ内を伝わった波は
+    ほとんど減衰しない。一方、背弧側へ向かう波は高温のマントルウェッジ
+    (低 Q) を通るため強く減衰する。このため深い地震では、震央から遠い
+    前弧側 (太平洋側) のほうが、近い背弧側より大きく揺れる。
+    2015 年小笠原諸島西方沖の地震 (深さ 682 km) で全国が有感となり、
+    最大震度が震央から 800 km 以上離れた関東で観測されたのがこれである。
+
+    司・翠川 (1999) の非弾性減衰項 -0.002*X は浅い地震に合わせたものなので、
+    前弧側の経路についてはその大部分を打ち消す。深さで滑らかに効かせる。
+    """
+    if depth_km <= SLAB_MIN_DEPTH_KM:
+        return np.zeros_like(np.asarray(distance_km, dtype=float))
+    deep = np.clip(
+        (depth_km - SLAB_MIN_DEPTH_KM) / (SLAB_FULL_DEPTH_KM - SLAB_MIN_DEPTH_KM), 0.0, 1.0
+    )
+    x = np.maximum(np.asarray(distance_km, dtype=float), 1.0)
+    # 0.002 は log10(PGV) に対する係数、1.72 は震度への換算係数
+    bonus = 1.72 * 0.002 * x * SLAB_Q_RECOVERY * deep * fore_arc_weight(lat, lon)
+    return np.minimum(bonus, SLAB_MAX_BONUS)
+
+
 def arv_from_avs30(avs30) -> np.ndarray:
     """藤本・翠川 (2006) による Vs=600m/s 基準の速度増幅率。
 

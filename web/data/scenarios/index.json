@@ -9,7 +9,7 @@
    "kind": "interplate",
    "maxIntensity": 6.3,
    "maxShindo": "6強",
-   "originTime": "2026-09-07T21:23:14+09:00",
+   "originTime": "2026-09-08T03:13:20+09:00",
    "tsunami": "大津波警報",
    "aftershocks": 400,
    "reports": 6
@@ -23,10 +23,24 @@
    "kind": "interplate",
    "maxIntensity": 7.0,
    "maxShindo": "7",
-   "originTime": "2026-09-07T21:05:34+09:00",
+   "originTime": "2026-09-08T02:54:07+09:00",
    "tsunami": "大津波警報",
    "aftershocks": 400,
    "reports": 9
+  },
+  {
+   "file": "ogasawara_deep.json",
+   "name": "小笠原諸島西方沖の深発地震",
+   "region": "小笠原諸島西方沖",
+   "magnitude": 8.1,
+   "depth": 682.0,
+   "kind": "intraslab",
+   "maxIntensity": 4.3,
+   "maxShindo": "4",
+   "originTime": "2026-09-08T02:57:30+09:00",
+   "tsunami": null,
+   "aftershocks": 400,
+   "reports": 20
   },
   {
    "file": "hyuganada.json",
@@ -37,7 +51,7 @@
    "kind": "interplate",
    "maxIntensity": 6.4,
    "maxShindo": "6強",
-   "originTime": "2026-09-07T20:48:57+09:00",
+   "originTime": "2026-09-08T02:38:07+09:00",
    "tsunami": "大津波警報",
    "aftershocks": 400,
    "reports": 7
@@ -49,9 +63,9 @@
    "magnitude": 7.6,
    "depth": 12.0,
    "kind": "crustal",
-   "maxIntensity": 6.8,
+   "maxIntensity": 6.7,
    "maxShindo": "7",
-   "originTime": "2026-09-07T21:07:15+09:00",
+   "originTime": "2026-09-08T02:55:44+09:00",
    "tsunami": "大津波警報",
    "aftershocks": 400,
    "reports": 10
@@ -65,7 +79,7 @@
    "kind": "crustal",
    "maxIntensity": 6.6,
    "maxShindo": "7",
-   "originTime": "2026-09-07T20:45:20+09:00",
+   "originTime": "2026-09-08T02:34:26+09:00",
    "tsunami": "津波注意報",
    "aftershocks": 213,
    "reports": 6
@@ -79,7 +93,7 @@
    "kind": "intraslab",
    "maxIntensity": 6.8,
    "maxShindo": "7",
-   "originTime": "2026-09-07T21:24:45+09:00",
+   "originTime": "2026-09-08T03:14:47+09:00",
    "tsunami": null,
    "aftershocks": 212,
    "reports": 6

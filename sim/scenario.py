@@ -19,7 +19,13 @@ from . import aftershock as aftershock_mod
 from . import variability
 from .eew import TRIGGER_GAL, EEWSimulator
 from .geo import haversine_array
-from .gmpe import arv_from_avs30, si_midorikawa_pga, si_midorikawa_pgv
+from .gmpe import (
+    arv_from_avs30,
+    magnitude_distance_correction,
+    slab_path_bonus,
+    si_midorikawa_pga,
+    si_midorikawa_pgv,
+)
 from .jma_intensity import intensity_from_pgv, round_intensity, shindo_class
 from .landmask import LandMask
 from .metrics import final_intensity_batch, integrate, realtime_intensity_batch
@@ -91,6 +97,8 @@ def gmpe_intensity(
     r = np.sqrt(epi**2 + depth**2)
     pgv = si_midorikawa_pgv(mag, r, depth, kind) * arv_from_avs30(stations.avs30)
     out = np.asarray(intensity_from_pgv(pgv), dtype=float)
+    out = out + magnitude_distance_correction(mag, r)
+    out = out + slab_path_bonus(depth, r, stations.lat, stations.lon)
     if residual is not None:
         out = out + residual
     return out
@@ -190,17 +198,23 @@ def run(config: ScenarioConfig, data_dir: Path | None = None, verbose: bool = Tr
 
     # 中央値の周りのばらつき。これが無いと震度分布が同心円の縞になる。
     # 強い揺れではばらつきを縮めるので、目安の震度を断層最短距離から出して渡す。
+    # 深発地震の異常震域 (前弧側はスラブを通ってほとんど減衰しない)
+    slab = slab_path_bonus(config.depth_km, arr["r_min"], stations.lat, stations.lon)
+    if verbose and float(np.max(slab)) > 0.2:
+        print(f"  異常震域: 前弧側で最大 {float(np.max(slab)):+.1f} 震度")
+
     median_est = np.asarray(
         intensity_from_pgv(
             si_midorikawa_pgv(config.magnitude, arr["r_min"], config.depth_km, config.kind)
             * arv_from_avs30(stations.avs30)
         ),
         dtype=float,
-    )
+    ) + magnitude_distance_correction(config.magnitude, arr["r_min"]) + slab
     resid = variability.intensity_residual(
         stations.lat, stations.lon, seed=config.seed + 977, median_intensity=median_est
     )
-    gain = variability.acceleration_gain(resid)
+    # 波形の振幅には、ばらつきと異常震域の両方を反映させる
+    gain = variability.acceleration_gain(resid + slab)
     # 余震には経路の項を引き直さず、観測点固有の項だけを使う
     site_resid = variability.PHI_SITE * variability.site_terms(stations.lat, stations.lon)
 
@@ -270,9 +284,11 @@ def run(config: ScenarioConfig, data_dir: Path | None = None, verbose: bool = Tr
         amp_far = arv_from_avs30(stations.avs30[far])
         pgv_far = si_midorikawa_pgv(config.magnitude, r_far, config.depth_km, config.kind) * amp_far
         pga_far = si_midorikawa_pga(config.magnitude, r_far, config.depth_km, config.kind) * amp_far
-        i_far = np.asarray(intensity_from_pgv(pgv_far), dtype=float) + resid[far]
+        i_far = (np.asarray(intensity_from_pgv(pgv_far), dtype=float)
+                 + magnitude_distance_correction(config.magnitude, r_far)
+                 + slab[far] + resid[far])
         final[far] = i_far
-        pgv[far] = pgv_far * variability.pgv_gain(resid[far])
+        pgv[far] = pgv_far * variability.pgv_gain(resid[far] + slab[far])
         pga[far] = pga_far * gain[far]
         realtime[far] = far_envelope(
             times, i_far, arr["t_p"][far], arr["t_s"][far], arr["r_min"][far],

@@ -118,6 +118,63 @@
     return out;
   };
 
+  /* ---------------- 距離減衰式の補正 ----------------
+   * 司・翠川 (1999) は遠方の減り方がマグニチュードによらない形をしている。
+   * 実際には小さい地震ほどコーナー周波数が高くて高周波が卓越し、Q(f) による
+   * 減衰が強く効くため、遠方では大きい地震より速く減る。Python 側の波形合成
+   * と比べると M5 では 200 km 以遠で 0.8 震度も過大だった。
+   * 波形合成に合わせる補正を掛ける (sim/gmpe.py と同じ式)。 */
+  var CORR_LENGTH_KM = 55.0;
+
+  function gmpeCorrection(mag, r) {
+    var g = 1 - Math.exp(-r / CORR_LENGTH_KM);
+    var far = Math.min(0.08, Math.max(-1.20, -0.80 + 0.45 * (mag - 5.0)));
+    var near = Math.min(0.35, Math.max(-0.50, -0.50 + 0.50 * (mag - 4.5)));
+    return near + (far - near) * g;
+  }
+
+  /* ---------------- 深発地震の異常震域 ----------------
+   * 沈み込む海洋プレートは冷たく Q が高いため、スラブ内を伝わった波は
+   * ほとんど減衰しない。一方、背弧側へ向かう波は高温のマントルウェッジ
+   * (低 Q) を通るので強く減衰する。このため深い地震では、震央から遠い
+   * 前弧側 (太平洋側) のほうが、近い背弧側より大きく揺れる。
+   * 2015 年小笠原諸島西方沖の地震 (深さ 682 km) で全国が有感となり、
+   * 最大震度が震央から 800 km 以上離れた関東で出たのがこれである。
+   * (sim/gmpe.py と同じ式) */
+  var VF_LAT = [24.8, 27.2, 31.9, 33.1, 34.1, 34.7, 35.4, 35.9, 36.4, 36.9,
+                37.6, 38.1, 38.9, 39.8, 40.7, 41.5, 42.7, 43.7, 45.4];
+  var VF_LON = [141.3, 140.9, 139.9, 139.8, 139.5, 139.4, 138.7, 138.5, 138.5, 139.5,
+                140.3, 140.4, 140.7, 141.0, 140.9, 140.9, 141.2, 142.7, 142.4];
+  var SLAB_MIN_DEPTH = 70.0, SLAB_FULL_DEPTH = 150.0;
+  var SLAB_WIDTH_KM = 100.0, SLAB_Q_RECOVERY = 0.45, SLAB_MAX_BONUS = 2.5;
+
+  /* 火山フロントの経度 (緯度から内挿する) */
+  function frontLon(lat) {
+    if (lat <= VF_LAT[0]) return VF_LON[0];
+    var n = VF_LAT.length;
+    if (lat >= VF_LAT[n - 1]) return VF_LON[n - 1];
+    for (var i = 1; i < n; i++) {
+      if (lat <= VF_LAT[i]) {
+        var t = (lat - VF_LAT[i - 1]) / (VF_LAT[i] - VF_LAT[i - 1]);
+        return VF_LON[i - 1] + (VF_LON[i] - VF_LON[i - 1]) * t;
+      }
+    }
+    return VF_LON[n - 1];
+  }
+
+  /* 前弧 (太平洋側) なら 1、背弧 (日本海側) なら 0 に近づく */
+  function foreArcWeight(lat, lon) {
+    var east = (lon - frontLon(lat)) * 111.32 * Math.cos(lat * Math.PI / 180);
+    return 0.5 + 0.5 * Math.tanh(east / SLAB_WIDTH_KM);
+  }
+
+  function slabBonus(depth, r, lat, lon) {
+    if (depth <= SLAB_MIN_DEPTH) return 0;
+    var deep = Math.min(1, (depth - SLAB_MIN_DEPTH) / (SLAB_FULL_DEPTH - SLAB_MIN_DEPTH));
+    var bonus = 1.72 * 0.002 * Math.max(r, 1) * SLAB_Q_RECOVERY * deep * foreArcWeight(lat, lon);
+    return Math.min(bonus, SLAB_MAX_BONUS);
+  }
+
   /* ---------------- 走時 ---------------- */
   Engine.prototype.travelTime = function (phase, depthKm, distKm) {
     var t = this.tt, table = phase === 'P' ? t.p : t.s;
@@ -207,7 +264,9 @@
       var logPgv = 0.58 * src.magnitude + 0.0038 * depth + d - 1.29
                  - Math.log10(r + c) - 0.002 * r;
       var pgv = Math.pow(10, logPgv) * this.arv[i];
-      var median = 2.68 + 1.72 * Math.log10(Math.max(pgv, 1e-6));
+      var median = 2.68 + 1.72 * Math.log10(Math.max(pgv, 1e-6))
+                 + gmpeCorrection(src.magnitude, r)
+                 + slabBonus(src.depth, r, st.lat[i], st.lon[i]);
       inten[i] = median + (resid ? resid[i] * sigmaScale(median) : 0);
 
       tp[i] = this.travelTime('P', src.depth, epi);
@@ -391,7 +450,9 @@
       if (r > 300) continue;
       var logPgv = 0.58 * src.magnitude + 0.0038 * depth + d - 1.29
                  - Math.log10(r + c) - 0.002 * r;
-      var med = 2.68 + 1.72 * (logPgv + Math.log10(this.arv[i]));
+      var med = 2.68 + 1.72 * (logPgv + Math.log10(this.arv[i]))
+              + gmpeCorrection(src.magnitude, r)
+              + slabBonus(src.depth, r, st.lat[i], st.lon[i]);
       var v = med + PHI_SITE * this.siteResid[i] * sigmaScale(med);
       if (v > best) best = v;
     }
