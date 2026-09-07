@@ -142,37 +142,53 @@
     var showNumber = radius >= 6.0;
     var margin = 26;
 
-    var faint = new Path2D();
     var cell = radius * 1.62;
     var cols = Math.ceil((this.cssWidth + margin * 2) / cell) + 1;
     var best = {};
     var i;
 
+    // まだ揺れていない観測点も同じ間引きに掛ける。ここで落としてしまうと
+    // 波面の外側だけ観測点が消え、地図に不自然な円の縁ができる。
     for (i = 0; i < n; i++) {
       var v = values ? values[i] : -3;
       var pt = p.project(lat[i], lon[i]);
       if (pt[0] < -margin || pt[0] > this.cssWidth + margin ||
           pt[1] < -margin || pt[1] > this.cssHeight + margin) continue;
-      if (v < -0.5) {
-        faint.moveTo(pt[0] + 1.4, pt[1]);
-        faint.arc(pt[0], pt[1], 1.4, 0, Math.PI * 2);
-        continue;
-      }
       var key = Math.floor((pt[1] + margin) / cell) * cols + Math.floor((pt[0] + margin) / cell);
       var cur = best[key];
       if (!cur || v > cur[2]) best[key] = [pt[0], pt[1], v];
     }
 
+    // 震度 0 に届かない観測点は、値に応じて大きさと濃さを落とした点で描く。
+    // 段階を細かく取ることで、波面のところで見た目が急に切り替わらない。
+    var QUIET = 6;
+    var quiet = new Array(QUIET);
     var groups = {};
     for (var key2 in best) {
       var e = best[key2];
+      if (e[2] < -0.5) {
+        var q = U.clamp(Math.floor((e[2] + 3.0) / 2.5 * QUIET), 0, QUIET - 1);
+        (quiet[q] || (quiet[q] = [])).push(e);
+        continue;
+      }
       var cls0 = U.shindoClass(e[2]);
       (groups[cls0] || (groups[cls0] = [])).push([e[0], e[1]]);
     }
 
     ctx.save();
-    ctx.fillStyle = 'rgba(150, 175, 200, 0.35)';
-    ctx.fill(faint);
+    for (var q2 = 0; q2 < QUIET; q2++) {
+      var qlist = quiet[q2];
+      if (!qlist) continue;
+      var frac = (q2 + 0.5) / QUIET;
+      var qr = Math.max(radius * (0.34 + 0.40 * frac), 2.4);
+      var qpath = new Path2D();
+      for (i = 0; i < qlist.length; i++) {
+        qpath.moveTo(qlist[i][0] + qr, qlist[i][1]);
+        qpath.arc(qlist[i][0], qlist[i][1], qr, 0, Math.PI * 2);
+      }
+      ctx.fillStyle = 'rgba(138, 162, 190, ' + (0.42 + 0.30 * frac).toFixed(3) + ')';
+      ctx.fill(qpath);
+    }
 
     var order = U.shindoOrder;
     ctx.lineWidth = Math.max(1.6, radius * 0.17);

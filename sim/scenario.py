@@ -16,9 +16,10 @@ from pathlib import Path
 import numpy as np
 
 from . import aftershock as aftershock_mod
+from . import variability
 from .eew import TRIGGER_GAL, EEWSimulator
 from .geo import haversine_array
-from .gmpe import arv_from_avs30, si_midorikawa_pgv
+from .gmpe import arv_from_avs30, si_midorikawa_pga, si_midorikawa_pgv
 from .jma_intensity import intensity_from_pgv, round_intensity, shindo_class
 from .landmask import LandMask
 from .metrics import final_intensity_batch, integrate, realtime_intensity_batch
@@ -54,7 +55,7 @@ class ScenarioConfig:
     aftershock_days: float = 3.0
     aftershock_m_min: float = 3.5
     with_tsunami: bool = True
-    max_distance_km: float = 900.0
+    max_distance_km: float = 900.0  # 波形合成を行う範囲。外側は距離減衰式で埋める
 
     def resolved_origin(self) -> datetime:
         if self.origin_time:
@@ -77,13 +78,57 @@ class StationSet:
 
 
 def gmpe_intensity(
-    stations: StationSet, lat: float, lon: float, depth: float, mag: float, kind: str
+    stations: StationSet,
+    lat: float,
+    lon: float,
+    depth: float,
+    mag: float,
+    kind: str,
+    residual: np.ndarray | None = None,
 ) -> np.ndarray:
     """距離減衰式による各観測点の計測震度 (余震など簡易評価用)。"""
     epi = haversine_array(lat, lon, stations.lat, stations.lon)
     r = np.sqrt(epi**2 + depth**2)
     pgv = si_midorikawa_pgv(mag, r, depth, kind) * arv_from_avs30(stations.avs30)
-    return np.asarray(intensity_from_pgv(pgv))
+    out = np.asarray(intensity_from_pgv(pgv), dtype=float)
+    if residual is not None:
+        out = out + residual
+    return out
+
+
+def far_envelope(
+    times: np.ndarray,
+    peak: np.ndarray,
+    t_p: np.ndarray,
+    t_s: np.ndarray,
+    r_km: np.ndarray,
+    rupture_s: float,
+) -> np.ndarray:
+    """遠方観測点のリアルタイム震度の包絡形 (ns, nt)。
+
+    P 波で本体より 2.5 ほど小さい値まで立ち上がり、S 波で最大に達し、
+    震源継続時間と経路による伸びのぶんだけ保ってから減衰する。
+    波形合成した観測点の時系列と見た目が揃うように形を合わせてある。
+    """
+    t = times[None, :]
+    tp = t_p[:, None]
+    ts = t_s[:, None]
+    r = r_km[:, None]
+    hold = rupture_s + 0.05 * r + 2.0
+    rise = 1.5 + 0.01 * r
+    decay = 0.08 + 2.0 / np.maximum(hold, 4.0)
+    top = peak[:, None]
+    p_level = top - 2.5
+
+    out = np.full((peak.size, times.size), -3.0)
+    up = np.clip((t - tp) / 1.2, 0.0, 1.0)
+    out = np.where(t >= tp - 0.5, -3.0 + (p_level + 3.0) * up, out)
+    out = np.where(t >= ts, p_level + (top - p_level) * np.clip((t - ts) / rise, 0.0, 1.0), out)
+    held = t - ts - rise
+    out = np.where(t >= ts + rise, top - 0.25 * np.clip(held, 0.0, None) / np.maximum(hold, 1.0), out)
+    tail = t - ts - rise - hold
+    out = np.where(t >= ts + rise + hold, top - 0.25 - decay * tail, out)
+    return np.maximum(out, -3.0)
 
 
 @dataclass
@@ -130,15 +175,34 @@ def run(config: ScenarioConfig, data_dir: Path | None = None, verbose: bool = Tr
         print(f"  断層: {fault.length_km:.0f} x {fault.width_km:.0f} km, "
               f"小断層 {fault.n_sub} 個, 破壊継続 {fault.total_rupture_duration:.0f} s")
 
-    # 遠方の観測点は震度に寄与しないため除外する
+    # 波形合成は近距離に限り、遠方は距離減衰式で埋める (下の far を参照)
     epi_all = haversine_array(config.lat, config.lon, stations.lat, stations.lon)
     use = np.nonzero(epi_all <= config.max_distance_km)[0]
+    far = np.nonzero(epi_all > config.max_distance_km)[0]
     if verbose:
-        print(f"  対象観測点: {use.size} / {stations.count} 点 (震央距離 {config.max_distance_km:.0f} km 以内)")
+        print(f"  波形合成: {use.size} / {stations.count} 点 "
+              f"(震央距離 {config.max_distance_km:.0f} km 以内、残り {far.size} 点は距離減衰式)")
 
     sim = StochasticSimulator(
         fault, model=model, path=PathParameters(), dt=config.dt, seed=config.seed
     )
+    arr = sim.arrivals(stations.lat, stations.lon)
+
+    # 中央値の周りのばらつき。これが無いと震度分布が同心円の縞になる。
+    # 強い揺れではばらつきを縮めるので、目安の震度を断層最短距離から出して渡す。
+    median_est = np.asarray(
+        intensity_from_pgv(
+            si_midorikawa_pgv(config.magnitude, arr["r_min"], config.depth_km, config.kind)
+            * arv_from_avs30(stations.avs30)
+        ),
+        dtype=float,
+    )
+    resid = variability.intensity_residual(
+        stations.lat, stations.lon, seed=config.seed + 977, median_intensity=median_est
+    )
+    gain = variability.acceleration_gain(resid)
+    # 余震には経路の項を引き直さず、観測点固有の項だけを使う
+    site_resid = variability.PHI_SITE * variability.site_terms(stations.lat, stations.lon)
 
     nt = int(round(config.timeline_seconds / config.timeline_dt))
     times = np.arange(nt) * config.timeline_dt
@@ -152,7 +216,8 @@ def run(config: ScenarioConfig, data_dir: Path | None = None, verbose: bool = Tr
     amp_curve = np.zeros((stations.count, n_amp))
 
     def on_chunk(idx, acc, t_ref, dt):
-        acc64 = acc.astype(np.float64)
+        # 観測点ごとの残差を波形の振幅に反映させる
+        acc64 = acc.astype(np.float64) * gain[idx][:, None, None]
         # リアルタイム震度 (局所時間軸) を全体タイムラインへ配置する
         t_local, rt = realtime_intensity_batch(acc64, dt, window_s=1.0, output_dt=config.timeline_dt)
         abs_t = t_local + t_ref
@@ -197,7 +262,22 @@ def run(config: ScenarioConfig, data_dir: Path | None = None, verbose: bool = Tr
         chunk=256, progress=progress,
     )
 
-    arr = sim.arrivals(stations.lat, stations.lon)
+    # -- 波形合成の対象外だった遠方の観測点 --
+    # 打ち切り距離でいきなり値が消えると、地図上に不自然な円の縁ができる。
+    # 遠方は最大震度に効かないので、距離減衰式と包絡形で埋めておく。
+    if far.size:
+        r_far = np.sqrt(epi_all[far] ** 2 + config.depth_km**2)
+        amp_far = arv_from_avs30(stations.avs30[far])
+        pgv_far = si_midorikawa_pgv(config.magnitude, r_far, config.depth_km, config.kind) * amp_far
+        pga_far = si_midorikawa_pga(config.magnitude, r_far, config.depth_km, config.kind) * amp_far
+        i_far = np.asarray(intensity_from_pgv(pgv_far), dtype=float) + resid[far]
+        final[far] = i_far
+        pgv[far] = pgv_far * variability.pgv_gain(resid[far])
+        pga[far] = pga_far * gain[far]
+        realtime[far] = far_envelope(
+            times, i_far, arr["t_p"][far], arr["t_s"][far], arr["r_min"][far],
+            fault.total_rupture_duration,
+        )
 
     # -- 緊急地震速報 --
     if verbose:
@@ -225,7 +305,9 @@ def run(config: ScenarioConfig, data_dir: Path | None = None, verbose: bool = Tr
             regions=regions,
         )
         for a in shocks:
-            inten = gmpe_intensity(stations, a.lat, a.lon, a.depth_km, a.magnitude, config.kind)
+            inten = gmpe_intensity(
+                stations, a.lat, a.lon, a.depth_km, a.magnitude, config.kind, residual=site_resid
+            )
             a.max_intensity = round_intensity(float(inten.max()))
 
     # -- 津波 --

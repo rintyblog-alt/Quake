@@ -14,6 +14,84 @@
   var DEPTH_TERM = { crustal: 0.0, interplate: 0.28, intraslab: 0.30 };
   var STRESS = { crustal: 100.0, interplate: 60.0, intraslab: 200.0 };
 
+  /* ---------------- 地震動のばらつき ----------------
+   * 距離減衰式が与えるのは中央値なので、そのまま使うと震度分布が
+   * 震源からの距離だけで決まる同心円の縞になり、隣り合う観測点が
+   * 必ず同じ震度になってしまう。Python 側の sim/variability.py と
+   * 同じ残差モデル (観測点固有の項 + 空間相関を持つ経路の項) を使う。
+   */
+  var PHI_SITE = 0.30;      // 観測点固有 (震度単位)
+  var PHI_PATH = 0.24;      // 経路 (震度単位)
+  var CORR_LEN_KM = 25.0;   // Jayaram & Baker (2009): rho(h) = exp(-3h/b)
+  var N_MODES = 256;
+  // 振幅依存の σ: 強い揺れでは地盤が非線形化して観測点ごとの差が縮まる
+  var SIGMA_FULL = 4.0, SIGMA_FLOOR_AT = 6.5, SIGMA_FLOOR = 0.40;
+
+  function sigmaScale(intensity) {
+    var t = (intensity - SIGMA_FULL) / (SIGMA_FLOOR_AT - SIGMA_FULL);
+    return Math.min(1, Math.max(SIGMA_FLOOR, 1 - (1 - SIGMA_FLOOR) * t));
+  }
+
+  /* MurmurHash3 の finalizer。Python 側と同じ値を返す。 */
+  function fmix32(x) {
+    x = x | 0;
+    x = Math.imul(x ^ (x >>> 16), 0x85EBCA6B);
+    x = Math.imul(x ^ (x >>> 13), 0xC2B2AE35);
+    return (x ^ (x >>> 16)) >>> 0;
+  }
+
+  /* 観測点の座標から決まる固定の標準正規乱数 (Box-Muller)。
+   * 同じ観測点はどの地震でも同じ向きにずれる (サイトの繰り返し性)。 */
+  function siteTerms(lat, lon) {
+    var n = lat.length, out = new Float32Array(n);
+    for (var i = 0; i < n; i++) {
+      var a = Math.imul(Math.round(lat[i] * 1000) | 0, 0x8DA6B343);
+      var b = Math.imul(Math.round(lon[i] * 1000) | 0, 0xD8163841);
+      var key = (a ^ b) | 0;
+      var u1 = Math.max(fmix32(key) / 4294967296, 1 / 4294967296);
+      var u2 = fmix32((key ^ 0x9E3779B1) | 0) / 4294967296;
+      out[i] = Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
+    }
+    return out;
+  }
+
+  /* 空間相関 exp(-3h/b) を持つ平均 0・分散 1 のガウス場。
+   * 指数型の相関は Matern (nu=1/2) にあたり、その波数スペクトルは
+   * 2 次元のコーシー分布になる。ランダムフーリエ級数
+   *   psi(x) = sqrt(2/M) * sum_j cos(k_j . x + phi_j)
+   * の波数をそこから引けば、相関関数がそのまま再現される。 */
+  function pathField(lat, lon, rng) {
+    var n = lat.length, out = new Float32Array(n);
+    if (!n) return out;
+    var lat0 = 0, lon0 = 0, i, j;
+    for (i = 0; i < n; i++) { lat0 += lat[i]; lon0 += lon[i]; }
+    lat0 /= n; lon0 /= n;
+    var kmPerLon = 111.32 * Math.cos(lat0 * Math.PI / 180);
+    var ell = CORR_LEN_KM / 3.0;
+
+    var kx = new Float64Array(N_MODES), ky = new Float64Array(N_MODES);
+    var ph = new Float64Array(N_MODES);
+    for (j = 0; j < N_MODES; j++) {
+      var z1 = gauss(rng), z2 = gauss(rng);
+      var g = Math.max(Math.abs(gauss(rng)), 1e-3);
+      kx[j] = z1 / (g * ell);
+      ky[j] = z2 / (g * ell);
+      ph[j] = rng() * 2 * Math.PI;
+    }
+    var scale = Math.sqrt(2 / N_MODES);
+    for (i = 0; i < n; i++) {
+      var x = (lon[i] - lon0) * kmPerLon, y = (lat[i] - lat0) * 111.32, sum = 0;
+      for (j = 0; j < N_MODES; j++) sum += Math.cos(kx[j] * x + ky[j] * y + ph[j]);
+      out[i] = scale * sum;
+    }
+    return out;
+  }
+
+  function gauss(rng) {
+    var u = Math.max(rng(), 1e-12);
+    return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * rng());
+  }
+
   function Engine(data) {
     this.stations = data.stations;      // {lat, lon, avs30, region, name}
     this.tt = data.traveltime;          // {depths, distances, p[][], s[][]}
@@ -25,7 +103,20 @@
       var v = Math.min(1500, Math.max(100, this.stations.avs30[i]));
       this.arv[i] = Math.pow(10, 1.83 - 0.66 * Math.log10(v));
     }
+    // 観測点固有の残差は地震によらず一定なので、ここで一度だけ求める
+    this.siteResid = siteTerms(this.stations.lat, this.stations.lon);
   }
+
+  /* この地震の残差 [震度単位] */
+  Engine.prototype.residual = function (rng) {
+    var site = this.siteResid, n = site.length;
+    var out = new Float32Array(n);
+    var path = rng ? pathField(this.stations.lat, this.stations.lon, rng) : null;
+    for (var i = 0; i < n; i++) {
+      out[i] = PHI_SITE * site[i] + (path ? PHI_PATH * path[i] : 0);
+    }
+    return out;
+  };
 
   /* ---------------- 走時 ---------------- */
   Engine.prototype.travelTime = function (phase, depthKm, distKm) {
@@ -94,7 +185,7 @@
   }
 
   /* ---------------- 震度分布 ---------------- */
-  Engine.prototype.intensityField = function (src) {
+  Engine.prototype.intensityField = function (src, resid) {
     var st = this.stations, n = st.lat.length;
     var dim = this.faultDimensions(src.magnitude, src.kind, src.dip);
     var d = DEPTH_TERM[src.kind] || 0;
@@ -116,7 +207,8 @@
       var logPgv = 0.58 * src.magnitude + 0.0038 * depth + d - 1.29
                  - Math.log10(r + c) - 0.002 * r;
       var pgv = Math.pow(10, logPgv) * this.arv[i];
-      inten[i] = 2.68 + 1.72 * Math.log10(Math.max(pgv, 1e-6));
+      var median = 2.68 + 1.72 * Math.log10(Math.max(pgv, 1e-6));
+      inten[i] = median + (resid ? resid[i] * sigmaScale(median) : 0);
 
       tp[i] = this.travelTime('P', src.depth, epi);
       ts[i] = this.travelTime('S', src.depth, epi);
@@ -299,7 +391,8 @@
       if (r > 300) continue;
       var logPgv = 0.58 * src.magnitude + 0.0038 * depth + d - 1.29
                  - Math.log10(r + c) - 0.002 * r;
-      var v = 2.68 + 1.72 * (logPgv + Math.log10(this.arv[i]));
+      var med = 2.68 + 1.72 * (logPgv + Math.log10(this.arv[i]));
+      var v = med + PHI_SITE * this.siteResid[i] * sigmaScale(med);
       if (v > best) best = v;
     }
     return global.Util.roundIntensity(best);
@@ -363,7 +456,7 @@
     var dt = options.dt || 1.0;
     var rng = mulberry32(options.seed || 12345);
 
-    var field = this.intensityField(src);
+    var field = this.intensityField(src, this.residual(mulberry32((options.seed || 12345) + 977)));
     var tl = this.timeline(field, src, duration, dt);
     var finals = new Float32Array(field.intensity.length);
     for (var i = 0; i < finals.length; i++) finals[i] = global.Util.roundIntensity(field.intensity[i]);
