@@ -23,6 +23,7 @@
     this.voice = null;
     this._lastSpoken = '';
     this.buffers = {};        // スロット名 -> AudioBuffer
+    this.channels = {};       // 系統名 -> 今鳴っている音 (重ねずに差し替える)
     this.manifest = null;
     this.slotsReady = false;
   }
@@ -103,18 +104,48 @@
     return attempt();
   };
 
-  /* 差し替え音源があれば再生して true を返す */
-  Sound.prototype.playSlot = function (slot, gain) {
+  /* 差し替え音源があれば再生して true を返す。
+   *
+   * channel を渡すと、その系統で鳴っている音を止めてから鳴らす。
+   * 検知音は段が上がるたび、続報音は報が来るたびに鳴るので、
+   * 重ねると混ざって 1 つの音のように聞こえてしまう。 */
+  Sound.prototype.playSlot = function (slot, gain, channel, hold) {
     if (!this.ctx || !this.enabled) return false;
     var buf = this.buffers[slot];
     if (!buf) return false;
+    if (channel) {
+      // 鳴り始めたばかりの音は、次の音で潰さず最後まで聞かせる
+      var cur = this.channels[channel];
+      if (cur && this.ctx.currentTime < cur.hold) return true;
+      this.stopChannel(channel);
+    }
     var src = this.ctx.createBufferSource();
     var g = this.ctx.createGain();
     g.gain.value = gain == null ? 1.0 : gain;
     src.buffer = buf;
     src.connect(g); g.connect(this.master);
     src.start();
+    if (channel) {
+      this.channels[channel] = {
+        src: src, gain: g,
+        hold: this.ctx.currentTime + Math.min(hold == null ? 0.3 : hold, buf.duration)
+      };
+    }
     return true;
+  };
+
+  /* 系統で鳴っている音を短く絞って止める (プツッと切らない) */
+  Sound.prototype.stopChannel = function (channel) {
+    var cur = this.channels[channel];
+    if (!cur) return;
+    this.channels[channel] = null;
+    try {
+      var t = this.ctx.currentTime;
+      cur.gain.gain.cancelScheduledValues(t);
+      cur.gain.gain.setValueAtTime(cur.gain.gain.value, t);
+      cur.gain.gain.linearRampToValueAtTime(0.0001, t + 0.06);
+      cur.src.stop(t + 0.07);
+    } catch (e) { /* 既に止まっていれば何もしない */ }
   };
 
   Sound.prototype.unlock = function () {
@@ -228,7 +259,7 @@
   /* 緊急地震速報 (予報): 落ち着いた 4 音を 2 回 */
   Sound.prototype.forecast = function () {
     this.unlock();
-    if (this.playSlot('eew_forecast')) return;
+    if (this.playSlot('eew_forecast', 1.0, 'eew', 1.4)) return;
     var seq = [587.33, 783.99, 698.46, 880.00];   // レ ソ ファ ラ
     for (var rep = 0; rep < 2; rep++) {
       for (var i = 0; i < seq.length; i++) {
@@ -240,9 +271,9 @@
   /* 緊急地震速報 (警報): 緊迫した 2 音の連打を 4 回 */
   Sound.prototype.warning = function () {
     this.unlock();
-    if (this.playSlot('eew_warning')) return;
+    if (this.playSlot('eew_warning', 1.0, 'eew', 1.4)) return;
     // 警報用の音源が無ければ予報用で代える (合成音より近い)
-    if (this.playSlot('eew_forecast')) return;
+    if (this.playSlot('eew_forecast', 1.0, 'eew', 1.4)) return;
     for (var i = 0; i < 4; i++) {
       var base = i * 0.56;
       this.chime(932.33, base, 0.34, 0.85, [[1, 1], [2, 0.5], [3, 0.3], [5.4, 0.12]]);
@@ -254,7 +285,7 @@
   Sound.prototype.tsunami = function (level) {
     this.unlock();
     var slot = level >= 3 ? 'tsunami_major' : (level >= 2 ? 'tsunami_warning' : 'tsunami_advisory');
-    if (this.playSlot(slot)) return;
+    if (this.playSlot(slot, 1.0, 'tsunami', 1.5)) return;
     var reps = level >= 3 ? 5 : 3;
     for (var i = 0; i < reps; i++) {
       var base = i * 1.0;
@@ -265,8 +296,8 @@
   /* 続報の通知音。震源やマグニチュードが大きく動いた報は別の音にする。 */
   Sound.prototype.update = function (major) {
     this.unlock();
-    if (major && this.playSlot('eew_update_major')) return;
-    if (this.playSlot('eew_update')) return;
+    if (major && this.playSlot('eew_update_major', 1.0, 'eew', 0.45)) return;
+    if (this.playSlot('eew_update', 1.0, 'eew', 0.45)) return;
     if (major) {
       this.chime(1244.51, 0, 0.22, 0.45, [[1, 1], [2, 0.3]]);
       this.chime(1567.98, 0.16, 0.24, 0.4, [[1, 1], [2, 0.25]]);
@@ -278,7 +309,7 @@
   /* 観測点が反応したときの音 (level は DETECT_LEVELS の段) */
   Sound.prototype.detect = function (level) {
     this.unlock();
-    if (this.playSlot('new_int_' + level)) return;
+    if (this.playSlot('new_int_' + level, 1.0, 'detect', 0.5)) return;
     var f = [660, 740, 880, 988, 1175, 1480, 1865][Math.min(level, 6)];
     this.tone(f, 0, 0.10 + level * 0.015, 'sine', 0.20 + level * 0.05);
   };
@@ -302,8 +333,8 @@
   Sound.prototype.info = function (stage) {
     this.unlock();
     var slot = INFO_SLOTS[(stage || 3) - 1];
-    if (slot && this.playSlot(slot)) return;
-    if (this.playSlot('quake_info')) return;
+    if (slot && this.playSlot(slot, 1.0, 'info', 1.2)) return;
+    if (this.playSlot('quake_info', 1.0, 'info', 1.2)) return;
     this.chime(659.25, 0, 0.45, 0.5);
     this.chime(987.77, 0.18, 0.55, 0.45);
   };

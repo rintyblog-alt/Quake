@@ -527,9 +527,12 @@
     var levels = this.sound.detectLevels();
     if (this.detectLevel < levels.length) {
       var gal = U.pgaFromIntensity(this.peakIntensity());
-      while (this.detectLevel < levels.length && gal >= levels[this.detectLevel]) {
-        this.sound.detect(this.detectLevel);
-        this.detectLevel++;
+      var reached = this.detectLevel;
+      while (reached < levels.length && gal >= levels[reached]) reached++;
+      // 一度に何段も上がったときは、いちばん上だけを鳴らす
+      if (reached > this.detectLevel) {
+        this.sound.detect(reached - 1);
+        this.detectLevel = reached;
       }
     }
 
