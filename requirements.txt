@@ -5,6 +5,7 @@ scipy>=1.10
 # データ整備 (tools/)
 openpyxl>=3.1      # 気象庁コード表 (xlsx) の読み込み
 matplotlib>=3.7    # 陸域マスクのラスタ化 (point-in-polygon)
+shapely>=2.0       # 市区町村界の融合 (細分区域・都道府県界のポリゴン)
 
 # 開発
 pytest>=7.4

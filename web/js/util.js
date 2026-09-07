@@ -42,14 +42,14 @@
   function lerp(a, b, t) { return a + (b - a) * t; }
 
   /* 計測震度 -> [r,g,b] */
-  function realtimeRGB(v) {
-    if (!isFinite(v)) v = -3;
-    if (v <= RT_STOPS[0][0]) return RT_STOPS[0][1];
-    var last = RT_STOPS[RT_STOPS.length - 1];
+  function interpolate(stops, v) {
+    if (!isFinite(v)) v = stops[0][0];
+    if (v <= stops[0][0]) return stops[0][1];
+    var last = stops[stops.length - 1];
     if (v >= last[0]) return last[1];
-    for (var i = 1; i < RT_STOPS.length; i++) {
-      if (v <= RT_STOPS[i][0]) {
-        var a = RT_STOPS[i - 1], b = RT_STOPS[i];
+    for (var i = 1; i < stops.length; i++) {
+      if (v <= stops[i][0]) {
+        var a = stops[i - 1], b = stops[i];
         var t = (v - a[0]) / (b[0] - a[0]);
         return [
           Math.round(lerp(a[1][0], b[1][0], t)),
@@ -59,6 +59,72 @@
       }
     }
     return last[1];
+  }
+
+  function realtimeRGB(v) { return interpolate(RT_STOPS, isFinite(v) ? v : -3); }
+
+  /* ---------------- 常時微動 ----------------
+   * 観測点は揺れていないときも交通・風・波・工場などの微動を拾っており、
+   * その大きさは場所によって二桁ほど違う。強震モニタの平常時の画面が
+   * 一様な青ではなく、青のなかに緑や黄緑がまだらに混じって見えるのは
+   * これによる。観測点ごとに決まった値なので、座標のハッシュから作る。
+   *
+   * PGA の対数正規分布とし、軟弱地盤ほど微動が大きいものとして
+   * 増幅率で中央値をずらす。
+   */
+  var AMBIENT_MEDIAN_LOG10 = -1.48;  // 中央値 0.033 gal
+  var AMBIENT_SIGMA_LOG10 = 0.60;
+  var AMBIENT_AVS30_SLOPE = 0.85;
+  var AMBIENT_MIN = 0.008, AMBIENT_MAX = 5.0;  // gal
+
+  function fmix32(x) {
+    x = x | 0;
+    x = Math.imul(x ^ (x >>> 16), 0x85EBCA6B);
+    x = Math.imul(x ^ (x >>> 13), 0xC2B2AE35);
+    return (x ^ (x >>> 16)) >>> 0;
+  }
+
+  /* 座標から決まる標準正規乱数 (同じ観測点はいつも同じ値) */
+  function siteNormal(lat, lon, salt) {
+    var a = Math.imul(Math.round(lat * 1000) | 0, 0x8DA6B343);
+    var b = Math.imul(Math.round(lon * 1000) | 0, 0xD8163841);
+    var key = ((a ^ b) ^ salt) | 0;
+    var u1 = Math.max(fmix32(key) / 4294967296, 1 / 4294967296);
+    var u2 = fmix32((key ^ 0x2545F491) | 0) / 4294967296;
+    return Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
+  }
+
+  /* 観測点の常時微動の大きさ [gal] */
+  function ambientPGA(lat, lon, avs30) {
+    var v = Math.min(1500, Math.max(100, avs30 || 400));
+    var arv = Math.pow(10, 1.83 - 0.66 * Math.log10(v));
+    var logPga = AMBIENT_MEDIAN_LOG10
+               + AMBIENT_AVS30_SLOPE * Math.log10(arv)
+               + AMBIENT_SIGMA_LOG10 * siteNormal(lat, lon, 0x51ED270B);
+    return Math.min(AMBIENT_MAX, Math.max(AMBIENT_MIN, Math.pow(10, logPga)));
+  }
+
+  /* 計測震度 I = 2*log10(a) + 0.94 の関係で読み替える */
+  function pgaFromIntensity(v) { return Math.pow(10, (v - 0.94) / 2); }
+
+  /* ---------------- PGA の配色 (強震モニタの地表最大加速度と同じ) ----------------
+   * 0.01 gal の濃い青から 1000 gal の暗い赤まで、対数で並べる。 */
+  var PGA_STOPS = [
+    [-2.0, [ 22,  44, 190]], [-1.7, [ 22,  74, 226]], [-1.3, [ 32, 132, 240]],
+    [-1.0, [ 40, 192, 236]], [-0.7, [ 40, 220, 192]], [-0.3, [ 44, 220, 112]],
+    [ 0.0, [ 92, 226,  70]], [ 0.3, [172, 230,  58]], [ 0.7, [230, 230,  50]],
+    [ 1.0, [250, 210,  40]], [ 1.3, [250, 170,  40]], [ 1.7, [250, 130,  30]],
+    [ 2.0, [245,  92,  30]], [ 2.3, [235,  50,  35]], [ 2.7, [210,  30,  42]],
+    [ 3.0, [168,  20,  44]]
+  ];
+  var PGA_TICKS = [0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 20, 50, 100, 200, 500, 1000];
+
+  function pgaRGB(gal) {
+    return interpolate(PGA_STOPS, Math.log10(Math.max(gal, 1e-4)));
+  }
+  function pgaCSS(gal) {
+    var c = pgaRGB(gal);
+    return 'rgb(' + c[0] + ',' + c[1] + ',' + c[2] + ')';
   }
 
   function realtimeCSS(v) {
@@ -177,6 +243,10 @@
   global.Util = {
     realtimeRGB: realtimeRGB,
     realtimeCSS: realtimeCSS,
+    ambientPGA: ambientPGA,
+    pgaFromIntensity: pgaFromIntensity,
+    pgaCSS: pgaCSS,
+    pgaTicks: PGA_TICKS,
     shindoClass: shindoClass,
     shindoColor: shindoColor,
     shindoTextColor: shindoTextColor,

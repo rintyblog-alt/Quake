@@ -264,26 +264,59 @@
   /* 参照している地震モニタと同じく、震度 5弱 から 1 までの 5 段で示す */
   var LEGEND_LEVELS = ['5弱', '4', '3', '2', '1'];
 
-  Panels.drawLegend = function () {
+  Panels.drawLegend = function (style) {
     var c = el('legend-bar');
     var ctx = c.getContext('2d');
+    var ul = el('legend-list');
+    ul.innerHTML = '';
+    ctx.clearRect(0, 0, c.width, c.height);
+
+    if (style === 'color') {
+      // PGA は対数目盛なので、帯は連続、目盛だけ 10 の冪で刻む
+      var ticks = U.pgaTicks;
+      var lo = Math.log10(ticks[0]), hi = Math.log10(ticks[ticks.length - 1]);
+      for (var y = 0; y < c.height; y++) {
+        var g = Math.pow(10, hi - (hi - lo) * (y + 0.5) / c.height);
+        ctx.fillStyle = U.pgaCSS(g);
+        ctx.fillRect(0, y, c.width, 1);
+      }
+      var step = Math.max(1, Math.round(ticks.length / 6));
+      var count = 0;
+      for (var k = ticks.length - 1; k >= 0; k -= step) {
+        var li = document.createElement('li');
+        li.textContent = ticks[k] + ' gal';
+        ul.appendChild(li);
+        count++;
+      }
+      fitLabels(ul, count);
+      return;
+    }
+
     var band = c.height / LEGEND_LEVELS.length;
     for (var i = 0; i < LEGEND_LEVELS.length; i++) {
       ctx.fillStyle = U.shindoColor(LEGEND_LEVELS[i]);
       ctx.fillRect(0, i * band, c.width, band + 0.5);
     }
-    var ul = el('legend-list');
-    ul.innerHTML = '';
     LEGEND_LEVELS.forEach(function (name) {
       var li = document.createElement('li');
       li.textContent = '震度' + name;
       ul.appendChild(li);
     });
+    fitLabels(ul, LEGEND_LEVELS.length);
   };
+
+  /* 目盛の数が変わっても帯の高さに収まるようにする */
+  function fitLabels(ul, count) {
+    var h = ul.getBoundingClientRect().height || 130;
+    var line = Math.floor(h / Math.max(count, 1)) + 'px';
+    for (var i = 0; i < ul.children.length; i++) ul.children[i].style.lineHeight = line;
+  }
 
   Panels.setLegendStyle = function (style) {
     el('style-number').classList.toggle('active', style !== 'color');
     el('style-color').classList.toggle('active', style === 'color');
+    el('legend-title').textContent = style === 'color' ? '地表最大加速度' : '地図の色';
+    Panels.drawLegend(style);
   };
 
   /* ---------------- トースト ---------------- */

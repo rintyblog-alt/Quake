@@ -37,57 +37,32 @@ BASE_DATA = [
 BASE_IMAGES = [("data/bathymetry.jpg", "image/jpeg")]
 
 
-def downsample(mask_payload: dict, subdiv_payload: dict, factor: int) -> tuple[dict, dict]:
-    """陸域マスクと細分区域を同じ倍率で粗くする.
+def downsample(mask_payload: dict, factor: int) -> dict:
+    """陸域マスクを粗くする.
 
-    細分区域の配列は陸域セルの並びに対応しているため、マスクだけを粗くすると
-    対応がずれて塗り分けが壊れる。両方をまとめて粗くする。
-    粗いセルは、含まれる細かいセルのいずれかが陸なら陸とし、区域は
-    その中で最も多いものを採る。
+    粗いセルは、含まれる細かいセルのいずれかが陸なら陸とする。
+    陸域マスクは震央地名の判定と津波の遮蔽判定に使うだけなので、
+    多少粗くても実用上は差し支えない。
     """
     if factor <= 1:
-        return mask_payload, subdiv_payload
+        return mask_payload
 
     n_lat, n_lon = mask_payload["n_lat"], mask_payload["n_lon"]
     bits = np.frombuffer(base64.b64decode(mask_payload["bits"]), dtype=np.uint8)
     mask = np.unpackbits(bits)[: n_lat * n_lon].reshape(n_lat, n_lon).astype(bool)
 
-    cells = np.frombuffer(base64.b64decode(subdiv_payload["cells"]), dtype=np.uint8)
-    n_area = len(subdiv_payload["codes"])
-
-    # 陸域セルの並びを、格子全体の区域番号 (255 = 海) に戻す
-    grid = np.full(n_lat * n_lon, 255, dtype=np.uint8)
-    grid[mask.ravel()] = cells
-    grid = grid.reshape(n_lat, n_lon)
-
     new_lat, new_lon = n_lat // factor, n_lon // factor
-    trimmed = grid[: new_lat * factor, : new_lon * factor]
-    blocks = trimmed.reshape(new_lat, factor, new_lon, factor).transpose(0, 2, 1, 3)
-    blocks = blocks.reshape(new_lat, new_lon, factor * factor)
+    trimmed = mask[: new_lat * factor, : new_lon * factor]
+    coarse = trimmed.reshape(new_lat, factor, new_lon, factor).any(axis=(1, 3))
 
-    coarse_mask = (blocks != 255).any(axis=2)
-    # 各粗いセルで最も多く現れる区域番号を採る
-    counts = np.zeros((new_lat, new_lon, n_area + 1), dtype=np.uint8)
-    for k in range(blocks.shape[2]):
-        v = blocks[:, :, k].astype(np.int16)
-        idx = np.where(v == 255, n_area, v)
-        np.add.at(counts, (np.arange(new_lat)[:, None], np.arange(new_lon)[None, :], idx), 1)
-    counts[:, :, n_area] = 0            # 海は候補から外す
-    coarse_area = counts.argmax(axis=2).astype(np.uint8)
-
-    out_mask = dict(mask_payload)
-    out_mask["n_lat"] = new_lat
-    out_mask["n_lon"] = new_lon
-    out_mask["step"] = mask_payload["step"] * factor
-    out_mask["lat_max"] = mask_payload["lat_min"] + new_lat * out_mask["step"]
-    out_mask["lon_max"] = mask_payload["lon_min"] + new_lon * out_mask["step"]
-    out_mask["bits"] = base64.b64encode(np.packbits(coarse_mask.ravel()).tobytes()).decode("ascii")
-
-    out_sub = dict(subdiv_payload)
-    out_sub["cells"] = base64.b64encode(
-        coarse_area[coarse_mask].tobytes()
-    ).decode("ascii")
-    return out_mask, out_sub
+    out = dict(mask_payload)
+    out["n_lat"] = new_lat
+    out["n_lon"] = new_lon
+    out["step"] = mask_payload["step"] * factor
+    out["lat_max"] = mask_payload["lat_min"] + new_lat * out["step"]
+    out["lon_max"] = mask_payload["lon_min"] + new_lon * out["step"]
+    out["bits"] = base64.b64encode(np.packbits(coarse.ravel()).tobytes()).decode("ascii")
+    return out
 
 
 def main() -> int:
@@ -115,8 +90,8 @@ def main() -> int:
     for rel, mime in BASE_IMAGES:
         raw = (WEB / rel).read_bytes()
         bundle[rel] = f"data:{mime};base64," + base64.b64encode(raw).decode("ascii")
-    bundle["data/landmask.json"], bundle["data/subdivisions.json"] = downsample(
-        bundle["data/landmask.json"], bundle["data/subdivisions.json"], args.landmask_factor
+    bundle["data/landmask.json"] = downsample(
+        bundle["data/landmask.json"], args.landmask_factor
     )
 
     names = [s for s in args.scenarios if s and s != "none"]

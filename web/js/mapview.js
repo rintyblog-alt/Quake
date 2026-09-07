@@ -26,7 +26,6 @@
     this.reliefMeta = null;
     this.stations = null;
     this.tsunamiZones = null;
-    this.subGrid = null;
 
     this.base = document.createElement('canvas');
     this.baseCtx = this.base.getContext('2d');
@@ -74,7 +73,15 @@
     ctx.imageSmoothingQuality = 'high';
     ctx.drawImage(img, tl[0], tl[1], w, h);
   };
-  MapView.prototype.setStations = function (s) { this.stations = s; };
+  MapView.prototype.setStations = function (s) {
+    this.stations = s;
+    // 観測点ごとの常時微動 [gal]。揺れていないときの色はこれで決まる。
+    var n = s.lat.length, amb = new Float32Array(n);
+    for (var i = 0; i < n; i++) {
+      amb[i] = global.Util.ambientPGA(s.lat[i], s.lon[i], s.avs30 ? s.avs30[i] : 400);
+    }
+    this.ambient = amb;
+  };
   MapView.prototype.setTsunamiZones = function (z) { this.tsunamiZones = z; };
 
   /* ---------------- 背景レイヤ ---------------- */
@@ -142,32 +149,25 @@
   };
 
   /* ---------------- 観測点 ---------------- */
-  /* 震度 0 に届かない観測点。数字は出さないが、リアルタイム震度の配色で
-   * 塗って観測点網が常に見えるようにする。値に応じて大きさを変えることで、
-   * 波面のところで見た目が急に切り替わらない。 */
-  var QUIET_TIERS = 8;
-  var QUIET_LO = -3.0, QUIET_HI = -0.5;
+  /* PGA の連続配色をこの段数に量子化して、同じ色をまとめて塗る */
+  var PGA_BUCKETS = 56, PGA_LO = -2.1, PGA_HI = 3.0;
 
-  function quietTier(v) {
-    var t = (v - QUIET_LO) / (QUIET_HI - QUIET_LO) * QUIET_TIERS;
-    return global.Util.clamp(Math.floor(t), 0, QUIET_TIERS - 1);
+  function pgaBucket(gal) {
+    var t = (Math.log10(Math.max(gal, 1e-4)) - PGA_LO) / (PGA_HI - PGA_LO);
+    return global.Util.clamp(Math.round(t * (PGA_BUCKETS - 1)), 0, PGA_BUCKETS - 1);
   }
 
-  function drawQuiet(ctx, tiers, radius, minRadius) {
-    for (var t = 0; t < QUIET_TIERS; t++) {
-      var list = tiers[t];
-      if (!list) continue;
-      var frac = (t + 0.5) / QUIET_TIERS;
-      var r = Math.max(radius * (0.40 + 0.38 * frac), minRadius);
-      var path = new Path2D();
-      for (var i = 0; i < list.length; i++) {
-        path.moveTo(list[i][0] + r, list[i][1]);
-        path.arc(list[i][0], list[i][1], r, 0, Math.PI * 2);
-      }
-      ctx.fillStyle = global.Util.realtimeCSS(QUIET_LO + (QUIET_HI - QUIET_LO) * frac);
-      ctx.fill(path);
-    }
+  function bucketCSS(b) {
+    return global.Util.pgaCSS(Math.pow(10, PGA_LO + (PGA_HI - PGA_LO) * b / (PGA_BUCKETS - 1)));
   }
+
+  /* 観測点の見かけの大きさ [gal]。揺れていなければ常時微動がそのまま出る。 */
+  MapView.prototype.stationPGA = function (values, i) {
+    var amb = this.ambient ? this.ambient[i] : 0.02;
+    if (!values) return amb;
+    var v = values[i];
+    return Math.max(global.Util.pgaFromIntensity(v), amb);
+  };
 
   MapView.prototype.drawStations = function (values) {
     if (!this.stations || !this.showStations) return;
@@ -194,17 +194,18 @@
           pt[1] < -margin || pt[1] > this.cssHeight + margin) continue;
       var key = Math.floor((pt[1] + margin) / cell) * cols + Math.floor((pt[0] + margin) / cell);
       var cur = best[key];
-      if (!cur || v > cur[2]) best[key] = [pt[0], pt[1], v];
+      if (!cur || v > cur[2]) best[key] = [pt[0], pt[1], v, this.stationPGA(values, i)];
     }
 
     // 震度 0 に届かない観測点は、値に応じて大きさと濃さを落とした点で描く。
     // 段階を細かく取ることで、波面のところで見た目が急に切り替わらない。
-    var quiet = new Array(QUIET_TIERS);
+    var quiet = new Array(PGA_BUCKETS);
     var groups = {};
     for (var key2 in best) {
       var e = best[key2];
       if (e[2] < -0.5) {
-        (quiet[quietTier(e[2])] || (quiet[quietTier(e[2])] = [])).push(e);
+        var qb = pgaBucket(e[3]);
+        (quiet[qb] || (quiet[qb] = [])).push(e);
         continue;
       }
       var cls0 = U.shindoClass(e[2]);
@@ -212,7 +213,18 @@
     }
 
     ctx.save();
-    drawQuiet(ctx, quiet, radius, 2.4);
+    var qr = Math.max(radius * 0.44, 2.4);
+    for (var qb2 = 0; qb2 < PGA_BUCKETS; qb2++) {
+      var qlist = quiet[qb2];
+      if (!qlist) continue;
+      var qpath = new Path2D();
+      for (i = 0; i < qlist.length; i++) {
+        qpath.moveTo(qlist[i][0] + qr, qlist[i][1]);
+        qpath.arc(qlist[i][0], qlist[i][1], qr, 0, Math.PI * 2);
+      }
+      ctx.fillStyle = bucketCSS(qb2);
+      ctx.fill(qpath);
+    }
 
     var order = U.shindoOrder;
     ctx.lineWidth = Math.max(1.6, radius * 0.17);
@@ -250,28 +262,26 @@
     var n = lat.length;
     var radius = U.clamp(2.6 * Math.pow(p.zoom, 0.35), 2.0, 7.0);
     var margin = 20;
-    var BUCKETS = 48, lo = -3.0, hi = 7.0;
-    var paths = new Array(BUCKETS);
+    var paths = new Array(PGA_BUCKETS);
     var i, b;
 
     // 揺れていない観測点も含め、全点を同じ大きさの色の円で塗る
     for (i = 0; i < n; i++) {
-      var v = values ? values[i] : -3;
       var pt = p.project(lat[i], lon[i]);
       if (pt[0] < -margin || pt[0] > this.cssWidth + margin ||
           pt[1] < -margin || pt[1] > this.cssHeight + margin) continue;
-      b = Math.round((U.clamp(v, lo, hi) - lo) / (hi - lo) * (BUCKETS - 1));
+      b = pgaBucket(this.stationPGA(values, i));
       if (!paths[b]) paths[b] = new Path2D();
       paths[b].moveTo(pt[0] + radius, pt[1]);
       paths[b].arc(pt[0], pt[1], radius, 0, Math.PI * 2);
     }
 
     ctx.save();
-    for (b = 0; b < BUCKETS; b++) {
+    for (b = 0; b < PGA_BUCKETS; b++) {
       if (!paths[b]) continue;
-      var val = lo + (hi - lo) * b / (BUCKETS - 1);
-      ctx.fillStyle = U.realtimeCSS(val);
-      ctx.shadowBlur = val >= 2.5 ? 3 + (val - 2.5) * 3 : 0;
+      var gal = Math.pow(10, PGA_LO + (PGA_HI - PGA_LO) * b / (PGA_BUCKETS - 1));
+      ctx.fillStyle = U.pgaCSS(gal);
+      ctx.shadowBlur = gal >= 5 ? 3 + Math.log10(gal / 5) * 6 : 0;
       ctx.shadowColor = ctx.fillStyle;
       ctx.fill(paths[b]);
     }
@@ -282,95 +292,102 @@
    * 震度速報は都道府県ではなく細分区域 (宮城県北部・南部など) の単位で
    * 発表されるため、陸域格子に割り当てた区域番号をもとに塗り分ける。
    */
-  MapView.prototype.setSubdivisions = function (payload, landmask) {
+  MapView.prototype.setSubdivisions = function (payload) {
     this.subCodes = payload.codes;
     this.subNames = payload.names;
     this.subCentroids = payload.centroids;
-
-    var bin = atob(payload.cells);
-    var cells = new Uint8Array(bin.length);
-    for (var i = 0; i < bin.length; i++) cells[i] = bin.charCodeAt(i);
-
-    var nLat = landmask.nLat, nLon = landmask.nLon;
-    var grid = new Uint8Array(nLat * nLon);
-    grid.fill(255);
-    var bytes = landmask.bytes, k = 0;
-    for (var b = 0; b < nLat * nLon; b++) {
-      if (bytes[b >> 3] & (128 >> (b & 7))) grid[b] = cells[k++];
+    // 区域ごとのポリゴン。量子化した差分の整数列で持っているので経度緯度に戻す。
+    var quant = payload.quant || 100000;
+    var polys = payload.polygons || {};
+    this.subRings = new Array(this.subCodes.length);
+    for (var a = 0; a < this.subCodes.length; a++) {
+      var src = polys[this.subCodes[a]];
+      if (!src) continue;
+      var rings = new Array(src.length);
+      for (var r = 0; r < src.length; r++) {
+        var enc = src[r], n = enc.length >> 1;
+        var ring = new Float64Array(enc.length);
+        var x = 0, y = 0;
+        for (var i = 0; i < n; i++) {
+          x += enc[i * 2]; y += enc[i * 2 + 1];
+          ring[i * 2] = x / quant;
+          ring[i * 2 + 1] = y / quant;
+        }
+        rings[r] = ring;
+      }
+      this.subRings[a] = rings;
     }
-    this.subGrid = grid;
-    this.subMask = landmask;
     this._subCache = null;
   };
 
-  MapView.prototype.drawObservedSubdivisions = function (areaIntensity) {
-    if (!this.subGrid) return;
-    var key = this.viewKey() + '|' + (this._subStamp || 0);
-    if (!this._subCache || this._subCache.key !== key) {
-      this._subCache = { key: key, canvas: this._renderSubdivisions(areaIntensity) };
+  /* 区域のポリゴンを今の投影で Path2D にする (表示範囲が変わるまで使い回す) */
+  MapView.prototype._subPaths = function () {
+    var key = this.viewKey();
+    if (this._subCache && this._subCache.key === key) return this._subCache.paths;
+    var p = this.proj, paths = new Array(this.subRings.length);
+    var margin = 40;
+    for (var a = 0; a < this.subRings.length; a++) {
+      var rings = this.subRings[a];
+      if (!rings) continue;
+      var path = new Path2D(), any = false;
+      for (var r = 0; r < rings.length; r++) {
+        var ring = rings[r], n = ring.length >> 1;
+        if (n < 3) continue;
+        // 画面外のリングは飛ばす (拡大時に効く)
+        var minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+        var pts = new Float64Array(ring.length);
+        for (var i = 0; i < n; i++) {
+          var pt = p.project(ring[i * 2 + 1], ring[i * 2]);
+          pts[i * 2] = pt[0]; pts[i * 2 + 1] = pt[1];
+          if (pt[0] < minX) minX = pt[0];
+          if (pt[0] > maxX) maxX = pt[0];
+          if (pt[1] < minY) minY = pt[1];
+          if (pt[1] > maxY) maxY = pt[1];
+        }
+        if (maxX < -margin || minX > this.cssWidth + margin ||
+            maxY < -margin || minY > this.cssHeight + margin) continue;
+        path.moveTo(pts[0], pts[1]);
+        for (i = 1; i < n; i++) path.lineTo(pts[i * 2], pts[i * 2 + 1]);
+        path.closePath();
+        any = true;
+      }
+      if (any) paths[a] = path;
     }
-    if (this._subCache.canvas) {
-      this.ctx.drawImage(this._subCache.canvas, 0, 0, this.cssWidth, this.cssHeight);
-    }
+    this._subCache = { key: key, paths: paths };
+    return paths;
   };
 
-  MapView.prototype._renderSubdivisions = function (areaIntensity) {
-    var U = global.Util, p = this.proj, m = this.subMask;
-    var w = this.cssWidth, h = this.cssHeight;
-    if (w < 2 || h < 2) return null;
-
-    var n = this.subCodes.length;
-    var cr = new Uint8Array(n), cg = new Uint8Array(n), cb = new Uint8Array(n), ca = new Uint8Array(n);
-    for (var a = 0; a < n; a++) {
+  MapView.prototype.drawObservedSubdivisions = function (areaIntensity) {
+    if (!this.subRings) return;
+    var ctx = this.ctx, U = global.Util;
+    var paths = this._subPaths();
+    // 同じ震度の区域はまとめて塗り、境目だけを白い線でなぞる
+    var groups = {};
+    for (var a = 0; a < paths.length; a++) {
       var v = areaIntensity[a];
-      if (!(v >= 0.5)) continue;
-      var hex = U.shindoColor(U.shindoClass(v));
-      cr[a] = parseInt(hex.slice(1, 3), 16);
-      cg[a] = parseInt(hex.slice(3, 5), 16);
-      cb[a] = parseInt(hex.slice(5, 7), 16);
-      ca[a] = 225;
+      if (!paths[a] || !(v >= 0.5)) continue;
+      var cls = U.shindoClass(v);
+      (groups[cls] || (groups[cls] = [])).push(paths[a]);
     }
-
-    var rowIdx = new Int32Array(h), colIdx = new Int32Array(w);
-    var y, x;
-    for (y = 0; y < h; y++) {
-      var gi = Math.floor((p.unproject(0, y + 0.5)[0] - m.latMin) / m.step);
-      rowIdx[y] = (gi >= 0 && gi < m.nLat) ? gi : -1;
+    ctx.save();
+    ctx.globalAlpha = 0.88;
+    var order = U.shindoOrder;
+    for (var k = 0; k < order.length; k++) {
+      var list = groups[order[k]];
+      if (!list) continue;
+      ctx.fillStyle = U.shindoColor(order[k]);
+      for (var i = 0; i < list.length; i++) ctx.fill(list[i], 'evenodd');
     }
-    for (x = 0; x < w; x++) {
-      var gj = Math.floor((p.unproject(x + 0.5, 0)[1] - m.lonMin) / m.step);
-      colIdx[x] = (gj >= 0 && gj < m.nLon) ? gj : -1;
+    ctx.globalAlpha = 1;
+    ctx.lineJoin = 'round';
+    ctx.lineWidth = 0.9;
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.6)';
+    for (k = 0; k < order.length; k++) {
+      var l2 = groups[order[k]];
+      if (!l2) continue;
+      for (i = 0; i < l2.length; i++) ctx.stroke(l2[i]);
     }
-
-    var off = document.createElement('canvas');
-    off.width = w; off.height = h;
-    var octx = off.getContext('2d');
-    var img = octx.createImageData(w, h);
-    var data = img.data;
-    var grid = this.subGrid, nLon = m.nLon;
-
-    for (y = 0; y < h; y++) {
-      var ri = rowIdx[y];
-      if (ri < 0) continue;
-      var rowOff = ri * nLon, base = y * w * 4, prev = 255;
-      for (x = 0; x < w; x++) {
-        var ci = colIdx[x];
-        if (ci < 0) { prev = 255; continue; }
-        var area = grid[rowOff + ci];
-        var o = base + x * 4;
-        if (area !== 255 && ca[area]) {
-          if (prev !== 255 && prev !== area && ca[prev]) {
-            data[o] = 255; data[o + 1] = 255; data[o + 2] = 255; data[o + 3] = 235;
-          } else {
-            data[o] = cr[area]; data[o + 1] = cg[area];
-            data[o + 2] = cb[area]; data[o + 3] = ca[area];
-          }
-        }
-        prev = area;
-      }
-    }
-    octx.putImageData(img, 0, 0);
-    return off;
+    ctx.restore();
   };
 
   MapView.prototype.drawSubdivisionBadges = function (areaIntensity) {

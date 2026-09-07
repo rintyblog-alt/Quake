@@ -158,7 +158,7 @@
         self.draw();
       }).catch(function () { /* 無ければ単色の海のまま */ });
       self.view.setTsunamiZones(self.tsunamiZones);
-      self.view.setSubdivisions(subdivisions, self.landmask);
+      self.view.setSubdivisions(subdivisions);
 
       // 観測点 -> 細分区域 の対応表
       var codeIndex = {};
@@ -933,7 +933,7 @@
   App.start = function () {
     this.view = new global.MapView(el('map'));
     this.sound = new global.Sound();
-    P.drawLegend();
+    P.drawLegend(this.view.stationStyle);
 
     var now = new Date();
     el('cfg-time').value = U.pad(now.getHours()) + ':' + U.pad(now.getMinutes()) + ':' + U.pad(now.getSeconds());
