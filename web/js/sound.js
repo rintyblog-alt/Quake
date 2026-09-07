@@ -29,10 +29,26 @@
 
   /* 差し替え音源のスロット定義 */
   var SLOTS = [
-    'eew_forecast', 'eew_warning', 'eew_update', 'quake_info',
+    'eew_forecast', 'eew_warning', 'eew_update', 'eew_update_major', 'quake_info',
     'tsunami_advisory', 'tsunami_warning', 'tsunami_major',
-    'countdown_tick', 'countdown_final'
+    'countdown_tick', 'countdown_final',
+    'new_int_0', 'new_int_1', 'new_int_2', 'new_int_3',
+    'new_int_4', 'new_int_5', 'new_int_6'
   ];
+
+  /* 観測点の反応で鳴らす音。揺れの最大 PGA [gal] が段を越えるたびに
+   * 下から順に一度ずつ鳴らす (常時微動は含めない値で判定する)。
+   * 段は PGA の配色に合わせてある。
+   *
+   *   0  微弱      水色にかかるあたり
+   *   1  弱い      緑
+   *   2  ギリ弱い  濃い緑から黄緑
+   *   3  ちょっと強い  黄
+   *   4  強い      濃い黄から橙
+   *   5  かなり強い    赤
+   *   6  極く強い  濃い赤 (最大)
+   */
+  var DETECT_LEVELS = [0.2, 0.5, 2.0, 5.0, 20.0, 150.0, 500.0];
 
   /* web/sounds/ を走査して使える音源を読み込む */
   Sound.prototype.loadSlots = function () {
@@ -40,15 +56,24 @@
     if (!this.ctx) this.unlock();
     if (!this.ctx) return Promise.resolve();
 
-    return fetch('sounds/manifest.json', { cache: 'no-cache' })
-      .then(function (r) { return r.ok ? r.json() : null; })
-      .catch(function () { return null; })
+    var bundled = global.__BUNDLED_DATA;
+    var load = bundled
+      ? Promise.resolve(bundled['sounds/manifest.json'] || null)
+      : fetch('sounds/manifest.json', { cache: 'no-cache' })
+          .then(function (r) { return r.ok ? r.json() : null; })
+          .catch(function () { return null; });
+
+    return load
       .then(function (manifest) {
         self.manifest = manifest;
         // マニフェストが無ければ差し替え音源は使わない (無用な 404 を出さない)
         if (!manifest) return null;
         var jobs = SLOTS.filter(function (slot) { return manifest[slot]; })
-          .map(function (slot) { return self.tryLoad(slot, ['sounds/' + manifest[slot]]); });
+          .map(function (slot) {
+            var rel = 'sounds/' + manifest[slot];
+            // バンドル版は data URI が埋め込まれている
+            return self.tryLoad(slot, [bundled ? (bundled[rel] || rel) : rel]);
+          });
         return Promise.all(jobs);
       })
       .then(function () {
@@ -215,6 +240,8 @@
   Sound.prototype.warning = function () {
     this.unlock();
     if (this.playSlot('eew_warning')) return;
+    // 警報用の音源が無ければ予報用で代える (合成音より近い)
+    if (this.playSlot('eew_forecast')) return;
     for (var i = 0; i < 4; i++) {
       var base = i * 0.56;
       this.chime(932.33, base, 0.34, 0.85, [[1, 1], [2, 0.5], [3, 0.3], [5.4, 0.12]]);
@@ -234,12 +261,28 @@
     }
   };
 
-  /* 続報の通知音 */
-  Sound.prototype.blip = function () {
+  /* 続報の通知音。震源やマグニチュードが大きく動いた報は別の音にする。 */
+  Sound.prototype.update = function (major) {
     this.unlock();
+    if (major && this.playSlot('eew_update_major')) return;
     if (this.playSlot('eew_update')) return;
+    if (major) {
+      this.chime(1244.51, 0, 0.22, 0.45, [[1, 1], [2, 0.3]]);
+      this.chime(1567.98, 0.16, 0.24, 0.4, [[1, 1], [2, 0.25]]);
+      return;
+    }
     this.chime(1567.98, 0, 0.16, 0.35, [[1, 1], [2, 0.25]]);
   };
+
+  /* 観測点が反応したときの音 (level は DETECT_LEVELS の段) */
+  Sound.prototype.detect = function (level) {
+    this.unlock();
+    if (this.playSlot('new_int_' + level)) return;
+    var f = [660, 740, 880, 988, 1175, 1480, 1865][Math.min(level, 6)];
+    this.tone(f, 0, 0.10 + level * 0.015, 'sine', 0.20 + level * 0.05);
+  };
+
+  Sound.prototype.detectLevels = function () { return DETECT_LEVELS; };
 
   /* 主要動到達までの秒読み */
   Sound.prototype.tick = function (last) {

@@ -226,6 +226,7 @@
     this.t = 0;
     this.firedReports = 0;
     this.firedTsunami = false;
+    this.detectLevel = 0;
     this.phase = 'detect';
     this._tween = null;
     if (this.sound) this.sound.cancelSpeech();
@@ -407,6 +408,12 @@
     this.firedReports = 0;
     for (var i = 0; i < cur.eew.length; i++) if (cur.eew[i].issuedAt <= this.t) this.firedReports = i + 1;
 
+    // 巻き戻し・早送りで鳴り直さないよう、今の反応の段まで進めておく
+    var levels = this.sound.detectLevels();
+    var gal = U.pgaFromIntensity(this.peakIntensity());
+    this.detectLevel = 0;
+    while (this.detectLevel < levels.length && gal >= levels[this.detectLevel]) this.detectLevel++;
+
     var first = cur.eew.length ? cur.eew[0].issuedAt : 6;
     var atEnd = k >= cur.nt - 1;
     this.phase = atEnd ? 'final' : (this.t < first ? 'detect' : 'monitor');
@@ -468,6 +475,24 @@
     requestAnimationFrame(function (ts) { self.tick(ts); });
   };
 
+  /* 続報のうち「大きく変わった」ものを見分ける */
+  function isMajorUpdate(prev, r) {
+    return prev.kind !== r.kind
+        || prev.maxShindo !== r.maxShindo
+        || Math.abs(prev.magnitude - r.magnitude) >= 0.5
+        || U.haversine(prev.lat, prev.lon, r.lat, r.lon) >= 30;
+  }
+
+  /* 今の時刻での全観測点の最大リアルタイム震度 */
+  App.peakIntensity = function () {
+    var cur = this.current;
+    if (!cur) return -3;
+    var k = Math.max(0, Math.min(Math.round(this.t / cur.dt), cur.nt - 1));
+    var vals = cur.getValues(k), mx = -3;
+    for (var i = 0; i < vals.length; i++) if (vals[i] > mx) mx = vals[i];
+    return mx;
+  };
+
   App.processEvents = function () {
     var cur = this.current, eew = cur.eew || [];
 
@@ -480,12 +505,22 @@
         if (r.kind === '警報') this.sound.warning(); else this.sound.forecast();
         this.sound.announceEEW(r);
       } else {
-        this.sound.blip();
         var prev = eew[this.firedReports - 1];
+        this.sound.update(prev ? isMajorUpdate(prev, r) : false);
         if (prev && (prev.kind !== r.kind || prev.maxShindo !== r.maxShindo)) this.sound.announceEEW(r);
       }
       P.showEEW(r, cur.originDate);
       this.firedReports++;
+    }
+
+    // 観測点の反応。揺れの最大 PGA が段を越えるたびに一度ずつ鳴らす。
+    var levels = this.sound.detectLevels();
+    if (this.detectLevel < levels.length) {
+      var gal = U.pgaFromIntensity(this.peakIntensity());
+      while (this.detectLevel < levels.length && gal >= levels[this.detectLevel]) {
+        this.sound.detect(this.detectLevel);
+        this.detectLevel++;
+      }
     }
 
     if (cur.tsunami && !this.firedTsunami && this.t >= cur.tsunami.issuedAt) {

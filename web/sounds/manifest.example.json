@@ -1,12 +1,19 @@
 {
-  "_comment": "このファイルを manifest.json にリネームし、実際に置いたファイル名だけを残す。書かれていないスロットは合成音になる。",
-  "eew_forecast": "eew_forecast.mp3",
-  "eew_warning": "eew_warning.mp3",
-  "eew_update": "eew_update.mp3",
+  "eew_forecast": "eew0.mp3",
+  "eew_warning": "eew1.mp3",
+  "eew_update": "koushin.mp3",
+  "eew_update_major": "koushinE.mp3",
   "quake_info": "quake_info.mp3",
   "tsunami_advisory": "tsunami_advisory.mp3",
   "tsunami_warning": "tsunami_warning.mp3",
   "tsunami_major": "tsunami_major.mp3",
   "countdown_tick": "countdown_tick.mp3",
-  "countdown_final": "countdown_final.mp3"
+  "countdown_final": "countdown_final.mp3",
+  "new_int_0": "NewInt0.mp3",
+  "new_int_1": "NewInt1.mp3",
+  "new_int_2": "NewInt2.mp3",
+  "new_int_3": "NewInt3.mp3",
+  "new_int_4": "NewInt4.mp3",
+  "new_int_5": "NewInt5.mp3",
+  "new_int_6": "NewInt6.mp3"
 }

@@ -37,6 +37,34 @@ BASE_DATA = [
 BASE_IMAGES = [("data/bathymetry.jpg", "image/jpeg")]
 
 
+def embed_sounds(bundle: dict) -> None:
+    """差し替え音源を data URI で埋め込む.
+
+    音源は権利の都合でリポジトリに入れていない (web/sounds/README.md)。
+    手元で単一 HTML として持ち歩きたいときだけ --sounds を付けて埋める。
+    """
+    manifest_path = WEB / "sounds" / "manifest.json"
+    if not manifest_path.exists():
+        print("  [警告] web/sounds/manifest.json が無いので音源は埋め込みません")
+        return
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    bundle["sounds/manifest.json"] = manifest
+    n = 0
+    for slot, name in manifest.items():
+        path = WEB / "sounds" / name
+        if not path.exists():
+            print(f"  [警告] {slot}: {name} が見つかりません")
+            continue
+        mime = MIME.get(path.suffix.lower(), "audio/mpeg")
+        raw = path.read_bytes()
+        bundle["sounds/" + name] = f"data:{mime};base64," + base64.b64encode(raw).decode("ascii")
+        n += 1
+    print(f"  音源 {n} 件を埋め込みました")
+
+
+MIME = {".mp3": "audio/mpeg", ".ogg": "audio/ogg", ".wav": "audio/wav", ".m4a": "audio/mp4"}
+
+
 def downsample(mask_payload: dict, factor: int) -> dict:
     """陸域マスクを粗くする.
 
@@ -74,6 +102,8 @@ def main() -> int:
                     help="埋め込むシナリオ名 (拡張子なし)。none で無し")
     ap.add_argument("--fragment", action="store_true",
                     help="html/head/body を外し、埋め込み用の断片として出力する")
+    ap.add_argument("--sounds", action="store_true",
+                    help="web/sounds/ の差し替え音源も埋め込む (手元で使う分だけ)")
     args = ap.parse_args()
 
     html = (WEB / "index.html").read_text(encoding="utf-8")
@@ -93,6 +123,9 @@ def main() -> int:
     bundle["data/landmask.json"] = downsample(
         bundle["data/landmask.json"], args.landmask_factor
     )
+
+    if args.sounds:
+        embed_sounds(bundle)
 
     names = [s for s in args.scenarios if s and s != "none"]
     index_path = WEB / "data" / "scenarios" / "index.json"
