@@ -6,6 +6,7 @@ web/sounds/*
 # 生データ (再取得可能・サイズが大きい)
 data/raw/japan.geojson
 data/raw/jmacode.zip
+data/raw/gmrt_japan.asc
 
 # Python
 __pycache__/

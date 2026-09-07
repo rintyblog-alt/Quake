@@ -30,7 +30,11 @@ BASE_DATA = [
     "data/tsunami_zones.json",
     "data/landmask.json",
     "data/subdivisions.json",
+    "data/bathymetry.json",
 ]
+
+# 画像はそのままでは JSON に入らないので data URI にして埋め込む
+BASE_IMAGES = [("data/bathymetry.jpg", "image/jpeg")]
 
 
 def downsample(mask_payload: dict, subdiv_payload: dict, factor: int) -> tuple[dict, dict]:
@@ -108,6 +112,9 @@ def main() -> int:
     bundle: dict[str, object] = {}
     for rel in BASE_DATA:
         bundle[rel] = json.loads((WEB / rel).read_text(encoding="utf-8"))
+    for rel, mime in BASE_IMAGES:
+        raw = (WEB / rel).read_bytes()
+        bundle[rel] = f"data:{mime};base64," + base64.b64encode(raw).decode("ascii")
     bundle["data/landmask.json"], bundle["data/subdivisions.json"] = downsample(
         bundle["data/landmask.json"], bundle["data/subdivisions.json"], args.landmask_factor
     )

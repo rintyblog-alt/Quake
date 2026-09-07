@@ -6,15 +6,11 @@
 (function (global) {
   'use strict';
 
-  var SEA_TOP = '#1d2c46';
-  var SEA_BOTTOM = '#0e1727';
-  var LAND_LINE = '#24384a';
-  var COAST_LINE = '#4a6a84';
-
-  /* 陸は都道府県ごとに落ち着いた色を割り当てる (政治地図のような塗り分け) */
-  var LAND_PALETTE = [
-    '#4f8b74', '#94a05a', '#6a8fae', '#a89566', '#6ea08e', '#8a8bab', '#7d9a62'
-  ];
+  /* 海底地形図が届くまでの下地。届いた後も画像の外側はこの色で埋める。 */
+  var SEA_FALLBACK = '#16233a';
+  /* 陸は都道府県で塗り分けず、一色のオリーブ灰にする */
+  var LAND_FILL = '#5f6553';
+  var LAND_LINE = 'rgba(214, 220, 200, 0.45)';   // 県境
 
   /* 津波の警報種別ごとの海岸線の色 */
   var TSUNAMI_COLORS = ['#4fc3f7', '#f5d020', '#e0231c', '#e838c8'];
@@ -26,6 +22,8 @@
     this.proj = new global.Projection(1, 1);
 
     this.geo = null;
+    this.relief = null;      // 海底地形図 (Web メルカトルで焼いた 1 枚絵)
+    this.reliefMeta = null;
     this.stations = null;
     this.tsunamiZones = null;
     this.subGrid = null;
@@ -56,6 +54,26 @@
   };
 
   MapView.prototype.setGeo = function (geojson) { this.geo = geojson; this.baseKey = ''; };
+
+  /* 海底地形図。経度と mercY について線形な投影なので、
+   * 画像の四隅を投影するだけで位置が合う。 */
+  MapView.prototype.setRelief = function (img, meta) {
+    this.relief = img;
+    this.reliefMeta = meta;
+    this.baseKey = '';
+  };
+
+  MapView.prototype.drawRelief = function (ctx) {
+    var img = this.relief, m = this.reliefMeta, p = this.proj;
+    if (!img || !m) return;
+    var tl = p.project(m.north, m.west);
+    var br = p.project(m.south, m.east);
+    var w = br[0] - tl[0], h = br[1] - tl[1];
+    if (w <= 0 || h <= 0) return;
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(img, tl[0], tl[1], w, h);
+  };
   MapView.prototype.setStations = function (s) { this.stations = s; };
   MapView.prototype.setTsunamiZones = function (z) { this.tsunamiZones = z; };
 
@@ -73,11 +91,9 @@
 
     var ctx = this.baseCtx, p = this.proj;
     ctx.save();
-    var sea = ctx.createLinearGradient(0, 0, 0, this.cssHeight);
-    sea.addColorStop(0, SEA_TOP);
-    sea.addColorStop(1, SEA_BOTTOM);
-    ctx.fillStyle = sea;
+    ctx.fillStyle = SEA_FALLBACK;
     ctx.fillRect(0, 0, this.cssWidth, this.cssHeight);
+    this.drawRelief(ctx);
 
     var tl = p.unproject(-80, -80);
     var br = p.unproject(this.cssWidth + 80, this.cssHeight + 80);
@@ -114,23 +130,43 @@
         }
       }
       if (!any) continue;
-      ctx.fillStyle = LAND_PALETTE[(feat.properties.id || 0) % LAND_PALETTE.length];
+      ctx.fillStyle = LAND_FILL;
       ctx.fill(path, 'evenodd');
     }
 
     ctx.lineJoin = 'round';
-    ctx.lineWidth = Math.min(1.0, 0.4 + p.zoom * 0.07);
+    ctx.lineWidth = Math.min(1.1, 0.5 + p.zoom * 0.06);
     ctx.strokeStyle = LAND_LINE;
     ctx.stroke(borders);
-    ctx.globalAlpha = 0.5;
-    ctx.lineWidth = Math.min(1.6, 0.7 + p.zoom * 0.06);
-    ctx.strokeStyle = COAST_LINE;
-    ctx.stroke(borders);
-    ctx.globalAlpha = 1;
     ctx.restore();
   };
 
   /* ---------------- 観測点 ---------------- */
+  /* まだ揺れていない観測点。値に応じて大きさと濃さを連続的に落とし、
+   * 波面のところで見た目が途切れないようにする。 */
+  var QUIET_TIERS = 6;
+  var QUIET_RGB = '138, 162, 190';
+
+  function quietTier(v) {
+    return global.Util.clamp(Math.floor((v + 3.0) / 2.5 * QUIET_TIERS), 0, QUIET_TIERS - 1);
+  }
+
+  function drawQuiet(ctx, tiers, radius, minRadius) {
+    for (var t = 0; t < QUIET_TIERS; t++) {
+      var list = tiers[t];
+      if (!list) continue;
+      var frac = (t + 0.5) / QUIET_TIERS;
+      var r = Math.max(radius * (0.34 + 0.40 * frac), minRadius);
+      var path = new Path2D();
+      for (var i = 0; i < list.length; i++) {
+        path.moveTo(list[i][0] + r, list[i][1]);
+        path.arc(list[i][0], list[i][1], r, 0, Math.PI * 2);
+      }
+      ctx.fillStyle = 'rgba(' + QUIET_RGB + ', ' + (0.42 + 0.30 * frac).toFixed(3) + ')';
+      ctx.fill(path);
+    }
+  }
+
   MapView.prototype.drawStations = function (values) {
     if (!this.stations || !this.showStations) return;
     if (this.stationStyle === 'color') return this.drawStationsColor(values);
@@ -161,14 +197,12 @@
 
     // 震度 0 に届かない観測点は、値に応じて大きさと濃さを落とした点で描く。
     // 段階を細かく取ることで、波面のところで見た目が急に切り替わらない。
-    var QUIET = 6;
-    var quiet = new Array(QUIET);
+    var quiet = new Array(QUIET_TIERS);
     var groups = {};
     for (var key2 in best) {
       var e = best[key2];
       if (e[2] < -0.5) {
-        var q = U.clamp(Math.floor((e[2] + 3.0) / 2.5 * QUIET), 0, QUIET - 1);
-        (quiet[q] || (quiet[q] = [])).push(e);
+        (quiet[quietTier(e[2])] || (quiet[quietTier(e[2])] = [])).push(e);
         continue;
       }
       var cls0 = U.shindoClass(e[2]);
@@ -176,19 +210,7 @@
     }
 
     ctx.save();
-    for (var q2 = 0; q2 < QUIET; q2++) {
-      var qlist = quiet[q2];
-      if (!qlist) continue;
-      var frac = (q2 + 0.5) / QUIET;
-      var qr = Math.max(radius * (0.34 + 0.40 * frac), 2.4);
-      var qpath = new Path2D();
-      for (i = 0; i < qlist.length; i++) {
-        qpath.moveTo(qlist[i][0] + qr, qlist[i][1]);
-        qpath.arc(qlist[i][0], qlist[i][1], qr, 0, Math.PI * 2);
-      }
-      ctx.fillStyle = 'rgba(138, 162, 190, ' + (0.42 + 0.30 * frac).toFixed(3) + ')';
-      ctx.fill(qpath);
-    }
+    drawQuiet(ctx, quiet, radius, 2.4);
 
     var order = U.shindoOrder;
     ctx.lineWidth = Math.max(1.6, radius * 0.17);
@@ -228,6 +250,7 @@
     var margin = 20;
     var BUCKETS = 48, lo = -3.0, hi = 7.0;
     var paths = new Array(BUCKETS);
+    var quiet = new Array(QUIET_TIERS);
     var i, b;
 
     for (i = 0; i < n; i++) {
@@ -235,6 +258,12 @@
       var pt = p.project(lat[i], lon[i]);
       if (pt[0] < -margin || pt[0] > this.cssWidth + margin ||
           pt[1] < -margin || pt[1] > this.cssHeight + margin) continue;
+      // まだ揺れていない観測点は、数字の円のときと同じ静かな点で描く
+      if (v < -0.5) {
+        var q = quietTier(v);
+        (quiet[q] || (quiet[q] = [])).push(pt);
+        continue;
+      }
       b = Math.round((U.clamp(v, lo, hi) - lo) / (hi - lo) * (BUCKETS - 1));
       if (!paths[b]) paths[b] = new Path2D();
       paths[b].moveTo(pt[0] + radius, pt[1]);
@@ -242,6 +271,8 @@
     }
 
     ctx.save();
+    // 色の円は間引かずに全点描くので、静かな点は小さめにして地図を潰さない
+    drawQuiet(ctx, quiet, radius, 1.2);
     for (b = 0; b < BUCKETS; b++) {
       if (!paths[b]) continue;
       var val = lo + (hi - lo) * b / (BUCKETS - 1);

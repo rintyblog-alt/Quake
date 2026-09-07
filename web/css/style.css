@@ -1,16 +1,17 @@
 /* seismic-sim — 地震モニタ
- * 濃紺のパネルと暗い海の地図。震度は数字入りの円で表す。 */
+ * ほぼ黒のパネルと、海底地形を敷いた地図。震度は数字入りの円で表す。 */
 
 :root {
-  --panel: #0d1a2b;
-  --panel-2: #16273f;
-  --panel-3: #1d3350;
-  --line: rgba(255, 255, 255, 0.10);
-  --line-2: rgba(255, 255, 255, 0.22);
-  --text: #f0f5fb;
-  --text-dim: #90a4bd;
-  --text-faint: #61758f;
+  --panel: #0d0e11;
+  --panel-2: #14161a;
+  --panel-3: #1e2127;
+  --line: rgba(255, 255, 255, 0.09);
+  --line-2: rgba(255, 255, 255, 0.20);
+  --text: #eef0f2;
+  --text-dim: #9aa0a8;
+  --text-faint: #6b727b;
   --red: #d92b1f;
+  --red-bright: #e8433a;
   --red-deep: #8a1210;
   --yellow: #ffd54a;
   --magenta: #e838c8;
@@ -99,7 +100,7 @@ html, body {
 }
 .meter-name { flex: 1; font-size: 16px; color: var(--text-dim); }
 .meter-value { font-family: var(--mono); font-size: 38px; font-weight: 700; line-height: 1.05; }
-.meter-bar { width: 15px; height: 40px; border-radius: 3px; background: #3a4a60; flex: 0 0 auto; }
+.meter-bar { width: 15px; height: 40px; border-radius: 3px; background: #2b2f36; flex: 0 0 auto; }
 
 .eew-message {
   margin: 0; padding: 8px 13px 11px; font-size: 14px; line-height: 1.5;
@@ -121,7 +122,7 @@ html, body {
   min-width: 44px; height: 34px; padding: 0 8px;
   display: flex; align-items: center; justify-content: center; border-radius: 4px;
   font-family: var(--mono); font-size: 20px; font-weight: 800; line-height: 1;
-  background: #38465c; color: #fff;
+  background: #2b2f36; color: #fff;
 }
 .shindo-badge.lg { min-width: 86px; height: 62px; font-size: 42px; border-radius: 6px; }
 .shindo-badge.sm { min-width: 36px; height: 29px; font-size: 18px; border-radius: 4px; }
@@ -162,7 +163,7 @@ html, body {
 #final-panel { border: 1px solid var(--line); border-radius: 5px; overflow: hidden; background: var(--panel-2); }
 .final-shindo {
   padding: 7px 11px; font-family: var(--mono); font-size: 19px; font-weight: 800;
-  letter-spacing: .03em; background: #38465c;
+  letter-spacing: .03em; background: #2b2f36;
 }
 .final-when { padding: 8px 11px 0; font-family: var(--mono); font-size: 12px; color: var(--text-dim); }
 .final-region-row { padding: 2px 11px 8px; }
@@ -223,7 +224,7 @@ html, body {
 /* ================= アイコン列 ================= */
 #railbar {
   position: absolute; left: var(--side-w); top: 0; bottom: 0; width: var(--rail-w);
-  background: #0a1421; border-right: 1px solid var(--line);
+  background: #0a0b0e; border-right: 1px solid var(--line);
   display: flex; flex-direction: column; align-items: center; gap: 5px;
   padding-top: 9px; z-index: 31;
 }
@@ -244,11 +245,12 @@ html, body {
 /* ================= 地図上の表示 ================= */
 .clock-pill {
   position: absolute; top: 11px; left: calc(var(--side-w) + var(--rail-w) + 18px);
-  z-index: 24; padding: 5px 13px; border-radius: 5px;
-  background: rgba(8, 16, 27, .9); border: 1px solid var(--line);
+  z-index: 24; padding: 5px 13px; border-radius: 4px;
+  background: rgba(22, 6, 6, .88); border: 1px solid #7d2320;
+  color: var(--red-bright);
   font-family: var(--mono); font-size: 15px; letter-spacing: .03em;
 }
-.clock-pill .suffix { font-size: 10px; font-family: var(--sans); }
+.clock-pill .suffix { font-size: 10px; font-family: var(--sans); color: var(--red-bright); }
 
 .drill-badge {
   position: absolute; top: 11px; right: 14px; z-index: 24;
@@ -261,7 +263,7 @@ html, body {
 .mode-switch {
   position: absolute; top: 66px; right: 14px; z-index: 24;
   display: flex; border-radius: 4px; overflow: hidden;
-  background: rgba(8, 16, 27, .9); border: 1px solid var(--line);
+  background: rgba(13, 14, 17, .9); border: 1px solid var(--line);
 }
 .mode-btn {
   appearance: none; border: 0; background: transparent; color: var(--text-dim);
@@ -276,15 +278,15 @@ html, body {
 }
 .zoom-ctl button {
   width: 42px; height: 42px; border-radius: 7px;
-  border: 1px solid var(--line); background: rgba(8, 16, 27, .9);
+  border: 1px solid var(--line); background: rgba(13, 14, 17, .9);
   color: #dce8f5; font-size: 22px; cursor: pointer; line-height: 1;
 }
-.zoom-ctl button:hover { background: rgba(30, 52, 80, .95); }
+.zoom-ctl button:hover { background: rgba(38, 42, 50, .95); }
 
 /* ---- 凡例 ---- */
 .legend {
   position: absolute; right: 14px; bottom: 74px; z-index: 23;
-  background: rgba(8, 16, 27, .92); border: 1px solid var(--line);
+  background: rgba(13, 14, 17, .92); border: 1px solid var(--line);
   border-radius: 5px; padding: 7px 9px;
 }
 .legend-head { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
@@ -306,7 +308,7 @@ html, body {
 
 .coast-legend {
   position: absolute; right: 14px; bottom: 74px; z-index: 23;
-  background: rgba(8, 16, 27, .92); border: 1px solid var(--line);
+  background: rgba(13, 14, 17, .92); border: 1px solid var(--line);
   border-radius: 5px; padding: 7px 9px;
 }
 .coast-list { list-style: none; margin: 5px 0 0; padding: 0; }
@@ -317,7 +319,7 @@ html, body {
 #wave-strip {
   position: absolute; left: calc(var(--side-w) + var(--rail-w) + 16px); top: 60px;
   z-index: 23; width: 200px; height: 168px; padding: 4px 4px 13px;
-  background: rgba(6, 11, 18, .9); border: 1px solid var(--line); border-radius: 5px;
+  background: rgba(8, 9, 12, .9); border: 1px solid var(--line); border-radius: 5px;
 }
 #wave-canvas { width: 100%; height: 100%; display: block; }
 .wave-scale { position: absolute; right: 6px; bottom: 2px; font-family: var(--mono); font-size: 9px; color: var(--text-faint); }
@@ -326,7 +328,7 @@ html, body {
 #timeline {
   position: absolute; left: calc(var(--side-w) + var(--rail-w) + 12px); right: 12px; bottom: 12px;
   height: 40px; display: flex; align-items: center; gap: 11px; padding: 0 11px; z-index: 26;
-  background: rgba(8, 16, 27, .92); border: 1px solid var(--line); border-radius: 5px;
+  background: rgba(13, 14, 17, .92); border: 1px solid var(--line); border-radius: 5px;
 }
 .ctl {
   appearance: none; width: 29px; height: 25px; flex: 0 0 auto;
@@ -397,7 +399,7 @@ button.ghost:hover { color: #fff; border-color: var(--accent); }
 .toast {
   position: absolute; left: calc(50% + (var(--side-w) + var(--rail-w)) / 2); bottom: 68px;
   transform: translateX(-50%); padding: 8px 17px; border-radius: 18px; z-index: 60;
-  background: rgba(8, 16, 27, .96); border: 1px solid var(--line-2); font-size: 12px;
+  background: rgba(13, 14, 17, .96); border: 1px solid var(--line-2); font-size: 12px;
 }
 .loading {
   position: absolute; inset: 0; z-index: 80;

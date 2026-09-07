@@ -4,6 +4,8 @@
     1. prepare_data      観測点・震央地名・地図・走時表・津波予報区一覧
     2. build_landmask    陸域マスク (1 の地図を使う)
     3. build_tsunami_zones  津波予報区の沿岸線 (1 と 2 を使う)
+    4. build_subdivisions   細分区域の区域図 (1 と 2 を使う)
+    5. build_bathymetry     海底地形の陰影図 (GMRT から取得)
 
 生データ (data/raw/) が揃っていることが前提。揃っていない場合は
 tools/fetch_sources.py と tools/fetch_avs30.py を先に実行する。
@@ -22,6 +24,8 @@ STEPS = [
                                         "--map-min-area", "8e-6"]),
     ("陸域マスク", ["build_landmask.py"]),
     ("津波予報区の沿岸線", ["build_tsunami_zones.py"]),
+    ("細分区域の区域図", ["build_subdivisions.py"]),
+    ("海底地形の陰影図", ["build_bathymetry.py"]),
 ]
 
 

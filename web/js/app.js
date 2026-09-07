@@ -108,6 +108,20 @@
     });
   }
 
+  /* 画像 (海底地形図) を読む。バンドル版では data URI が埋め込まれている。 */
+  function fetchImage(path) {
+    var bundled = global.__BUNDLED_DATA;
+    var src = bundled && Object.prototype.hasOwnProperty.call(bundled, path)
+      ? bundled[path] : (bundled ? null : path);
+    if (!src) return Promise.reject(new Error(path + ' はこのビルドに含まれていません'));
+    return new Promise(function (resolve, reject) {
+      var img = new Image();
+      img.onload = function () { resolve(img); };
+      img.onerror = function () { reject(new Error(path + ' の読み込みに失敗しました')); };
+      img.src = src;
+    });
+  }
+
   App.load = function () {
     var self = this;
     return Promise.all([
@@ -135,6 +149,14 @@
 
       self.view.setGeo(self.geo);
       self.view.setStations(stations);
+      // 海底地形図は無くても地図は成立するので、遅れて届いても構わない
+      Promise.all([
+        fetchImage('data/bathymetry.jpg'),
+        fetchJSON('data/bathymetry.json')
+      ]).then(function (r) {
+        self.view.setRelief(r[0], r[1]);
+        self.draw();
+      }).catch(function () { /* 無ければ単色の海のまま */ });
       self.view.setTsunamiZones(self.tsunamiZones);
       self.view.setSubdivisions(subdivisions, self.landmask);
 
