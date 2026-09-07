@@ -29,7 +29,8 @@
 
   /* 差し替え音源のスロット定義 */
   var SLOTS = [
-    'eew_forecast', 'eew_warning', 'eew_update', 'eew_update_major', 'quake_info',
+    'eew_forecast', 'eew_warning', 'eew_update', 'eew_update_major',
+    'quake_info', 'quake_info_shindo', 'quake_info_hypo', 'quake_info_detail',
     'tsunami_advisory', 'tsunami_warning', 'tsunami_major',
     'countdown_tick', 'countdown_final',
     'new_int_0', 'new_int_1', 'new_int_2', 'new_int_3',
@@ -292,9 +293,16 @@
     else this.tone(1046.5, 0, 0.07, 'square', 0.3);
   };
 
-  /* 地震情報の受信音 */
-  Sound.prototype.info = function () {
+  /* 地震情報の受信音。気象庁の 3 段階に対応する。
+   *   1 震度速報 (VXSE51)             震度だけが先に出る
+   *   2 震源に関する情報 (VXSE52)     震源・規模・深さが決まる
+   *   3 震源・震度に関する情報 (VXSE53) 確定 */
+  var INFO_SLOTS = ['quake_info_shindo', 'quake_info_hypo', 'quake_info_detail'];
+
+  Sound.prototype.info = function (stage) {
     this.unlock();
+    var slot = INFO_SLOTS[(stage || 3) - 1];
+    if (slot && this.playSlot(slot)) return;
     if (this.playSlot('quake_info')) return;
     this.chime(659.25, 0, 0.45, 0.5);
     this.chime(987.77, 0.18, 0.55, 0.45);

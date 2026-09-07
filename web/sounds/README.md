@@ -11,7 +11,10 @@
 | `eew_warning`    | 緊急地震速報（警報）の第1報。無ければ `eew_forecast` で代える |
 | `eew_update`     | 第2報以降の続報 |
 | `eew_update_major` | 続報のうち、震源が 30 km 以上動いた・マグニチュードが 0.5 以上変わった・予想最大震度の階級が変わった・予報と警報が入れ替わった、のいずれかに当たるもの |
-| `quake_info`     | 地震情報の受信 |
+| `quake_info`     | 地震情報の受信（下の 3 つが無いときの代わり） |
+| `quake_info_shindo` | 震度速報（VXSE51）。震度だけが先に出る |
+| `quake_info_hypo`   | 震源に関する情報（VXSE52）。震源・規模・深さが決まる |
+| `quake_info_detail` | 震源・震度に関する情報（VXSE53）。確定 |
 | `tsunami_advisory` | 津波注意報 |
 | `tsunami_warning`  | 津波警報 |
 | `tsunami_major`    | 大津波警報 |

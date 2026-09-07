@@ -227,6 +227,7 @@
     this.firedReports = 0;
     this.firedTsunami = false;
     this.detectLevel = 0;
+    this.infoStage = 0;
     this.phase = 'detect';
     this._tween = null;
     if (this.sound) this.sound.cancelSpeech();
@@ -418,8 +419,17 @@
     var atEnd = k >= cur.nt - 1;
     this.phase = atEnd ? 'final' : (this.t < first ? 'detect' : 'monitor');
 
+    // 巻き戻し・早送りで鳴り直さないよう、今の時刻の段階まで進めておく
+    this.infoStage = 0;
+    while (this.infoStage < INFO_TIMES.length && this.t >= INFO_TIMES[this.infoStage]) this.infoStage++;
+
     if (this.phase === 'final') {
       this.showFinal();
+    } else if (this.infoStage > 0) {
+      this.showInfo(this.infoStage);
+      el('wave-strip').classList.toggle('hidden', !this.panelOn.wave);
+      if (this.firedReports > 0) P.showEEW(cur.eew[this.firedReports - 1], cur.originDate);
+      else P.hideEEW();
     } else {
       P.hideFinalInfo();
       el('wave-strip').classList.toggle('hidden', !this.panelOn.wave);
@@ -523,6 +533,13 @@
       }
     }
 
+    // 地震情報。震度速報から順に、時間が来たものを出す。
+    while (this.infoStage < INFO_TIMES.length && this.t >= INFO_TIMES[this.infoStage]) {
+      this.infoStage++;
+      this.showInfo(this.infoStage);
+      this.sound.info(this.infoStage);
+    }
+
     if (cur.tsunami && !this.firedTsunami && this.t >= cur.tsunami.issuedAt) {
       this.firedTsunami = true;
       if (this.panelOn.tsunami) P.showTsunami(cur.tsunami, cur.originDate);
@@ -537,8 +554,9 @@
     var cur = this.current;
     if (!cur) return;
     this.phase = 'final';
+    var wasFinal = this.infoStage >= 3;
     this.showFinal();
-    this.sound.info();
+    if (!wasFinal) this.sound.info(3);
     this.sound.announceQuake({
       region: cur.source.region, shindo: cur.source.maxShindo,
       magnitude: cur.source.magnitude, depth: cur.source.depth,
@@ -547,16 +565,28 @@
     this.scheduleAftershocks();
   };
 
-  App.showFinal = function () {
+  /* 地震情報の発表時刻 [s]。気象庁の順序に合わせ、
+   * 震度速報 -> 震源に関する情報 -> 震源・震度に関する情報 と出す。 */
+  var INFO_TIMES = [90, 170, 260];
+
+  /* 段階に応じた地震情報を出す (3 = 確定) */
+  App.showInfo = function (stage) {
     var cur = this.current;
-    P.hideEEW();
-    P.hideDetect();
-    el('wave-strip').classList.add('hidden');
+    if (!cur) return;
     P.showFinalInfo({
+      stage: stage,
       region: cur.source.region, magnitude: cur.source.magnitude,
       depth: cur.source.depth, maxIntensity: cur.source.maxIntensity,
       time: cur.originDate, areas: this.topAreas(this.areaIntensity, 8)
     });
+  };
+
+  App.showFinal = function () {
+    P.hideEEW();
+    P.hideDetect();
+    el('wave-strip').classList.add('hidden');
+    this.infoStage = 3;
+    this.showInfo(3);
   };
 
   App.scheduleAftershocks = function () {

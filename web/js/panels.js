@@ -153,8 +153,16 @@
   Panels.hideTsunami = function () { el('tsunami-panel').classList.add('hidden'); };
 
   /* ---------------- 地震情報 (確定) ---------------- */
+  /* 地震情報の 3 段階 (気象庁の発表順) */
+  var INFO_KINDS = ['震度速報', '震源に関する情報', '震源・震度に関する情報'];
+
   Panels.showFinalInfo = function (info) {
     el('final-panel').classList.remove('hidden');
+    // 震度速報の段階では震源がまだ決まっていない
+    var stage = info.stage || 3;
+    var hasHypo = stage >= 2;
+    el('final-kind').textContent = INFO_KINDS[stage - 1];
+
     var cls = U.shindoClass(info.maxIntensity);
     var bar = el('final-shindo');
     bar.textContent = '最大震度 ' + U.shindoShort(cls);
@@ -164,11 +172,13 @@
     el('final-when').textContent = info.time
       ? (info.time.getMonth() + 1) + '月' + info.time.getDate() + '日 ' +
         U.pad(info.time.getHours()) + '時' + U.pad(info.time.getMinutes()) + '分ごろ' : '';
-    el('final-region').textContent = info.region;
-    el('final-magnitude').textContent = Number(info.magnitude).toFixed(1);
-    el('final-mag-bar').style.background = magnitudeColor(info.magnitude);
-    el('final-depth').textContent = Math.round(info.depth) + 'km';
-    el('final-depth-bar').style.background = depthColor(info.depth);
+    el('final-region').textContent = hasHypo ? info.region : '震源を調査中';
+    el('final-magnitude').textContent = hasHypo ? Number(info.magnitude).toFixed(1) : '--';
+    el('final-mag-bar').style.background =
+      hasHypo ? magnitudeColor(info.magnitude) : 'var(--panel-3)';
+    el('final-depth').textContent = hasHypo ? Math.round(info.depth) + 'km' : '--';
+    el('final-depth-bar').style.background =
+      hasHypo ? depthColor(info.depth) : 'var(--panel-3)';
 
     var ul = el('final-areas');
     ul.innerHTML = '';
