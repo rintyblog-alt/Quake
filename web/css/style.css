@@ -342,7 +342,7 @@ html, body {
 .track::-webkit-slider-thumb { appearance: none; width: 13px; height: 13px; border-radius: 50%; background: var(--accent); cursor: pointer; }
 .track::-moz-range-thumb { width: 13px; height: 13px; border: 0; border-radius: 50%; background: var(--accent); cursor: pointer; }
 .track-marks { position: absolute; left: 0; right: 0; top: 50%; height: 0; pointer-events: none; }
-.track-marks i { position: absolute; width: 2px; height: 12px; margin-top: -6px; background: #f2941f; border-radius: 1px; }
+.track-marks i { position: absolute; width: 2px; height: 12px; margin-top: -6px; background: #f5a33c; border-radius: 1px; }
 .track-marks i.tsunami { background: var(--magenta); }
 .tl-time { font-family: var(--mono); font-size: 12px; min-width: 60px; text-align: right; color: var(--text-dim); }
 .speed, .toggle { font-size: 11px; color: var(--text-dim); display: flex; align-items: center; gap: 5px; }

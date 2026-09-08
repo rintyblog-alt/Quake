@@ -8,8 +8,8 @@ Scratch の「音声合成」拡張が使っている合成サーバ (MIT) を�
 読み上げ文は部品に分けて合成し、再生時につなげる。こうすることで、設定モードで
 指定した任意の震源についても、あらかじめ用意した音声だけで読み上げられる。
 
-  地震速報 (仮)
-    地震速報。最大震度6強を。宮城県北部。で観測しました。
+  震度速報 (仮)
+    震度速報。最大震度6強を。宮城県北部。で観測しました。
 
   地震情報 (確定・津波なし)
     地震情報。午後3時47分頃、最大震度6強を観測する地震がありました。
@@ -18,6 +18,13 @@ Scratch の「音声合成」拡張が使っている合成サーバ (MIT) を�
 
   地震情報 (確定・津波発表中)
     …がありました。現在、津波予報等を発表中です。震源地は、…
+
+  津波警報・大津波警報
+    大津波警報が次の地域に発表されています。直ちに避難してください。
+    宮城県、岩手県。以上の地域で、予想される津波の高さは、10メートル以上です。
+    また、津波注意報が、次の地域に発表されています。…
+    震源に関する情報。震源地は、宮城県沖。深さ20キロメートル。…
+    現在、大津波警報等を発表中です。海岸からは直ちに離れてください。
 
 使い方::
 
@@ -64,8 +71,8 @@ DEFAULT_VOICE = "squeak"
 
 # 定型句。原稿の切れ目に合わせて分けてある。
 PHRASES = {
-    # 地震速報 (仮) : 地震速報。最大震度○を。○○○。で観測しました。
-    "flash_lead": "地震速報。最大震度",
+    # 震度速報 (仮) : 震度速報。最大震度○を。○○○。で観測しました。
+    "flash_lead": "震度速報。最大震度",
     "flash_wo": "を。",
     "flash_tail": "で観測しました。",
 
@@ -81,6 +88,30 @@ PHRASES = {
     "info_depth_lead": "深さ",
     "info_km": "キロメートル。地震の規模を示すマグニチュードは、",
     "info_mag_tail": "と、推定されています。",
+
+    # 津波警報・大津波警報・津波注意報
+    "tsu_major": "大津波警報",
+    "tsu_warning": "津波警報",
+    "tsu_advisory": "津波注意報",
+    "tsu_issued": "が次の地域に発表されています。",
+    "tsu_issued2": "が、次の地域に発表されています。",
+    "tsu_evacuate": "直ちに避難してください。",
+    "tsu_mata": "また、",
+    "tsu_ijou": "以上の地域で、予想される津波の高さは、",
+    "tsu_desu": "です。",
+    "tsu_leave_sea": "海の中や海岸から離れてください。",
+
+    # 津波発表中の震源情報 (#3)
+    "hypo_lead": "震源に関する情報。震源地は、",
+    "tsu_now_lead": "現在、",
+    "tsu_now_tail": "等を発表中です。海岸からは直ちに離れてください。",
+}
+
+# 予想される津波の高さ
+HEIGHTS = {
+    "height_10p": "10メートル以上", "height_10": "10メートル", "height_5": "5メートル",
+    "height_3": "3メートル", "height_1": "1メートル", "height_02": "20センチ",
+    "height_slight": "若干の海面変動",
 }
 
 # 震度階級
@@ -114,6 +145,12 @@ def depth_phrases() -> dict[str, str]:
     return {f"depth_{v}": str(v) for v in DEPTH_VALUES}
 
 
+def zone_phrases() -> dict[str, str]:
+    """津波予報区 (「以上の地域で」の前に読み上げる沿岸の名前)。"""
+    zones = json.loads((DATA / "tsunami_zones.json").read_text(encoding="utf-8"))["zones"]
+    return {f"zone_{z['code']}": z["name"] for z in zones}
+
+
 def region_phrases() -> dict[str, str]:
     """震央地名 (「震源地は、○○○」の部分)。"""
     regions = json.loads((DATA / "regions.json").read_text(encoding="utf-8"))["regions"]
@@ -129,6 +166,7 @@ def area_phrases() -> dict[str, str]:
 def build_phrases(scope: str) -> dict[str, str]:
     out: dict[str, str] = {}
     out.update(PHRASES)
+    out.update(HEIGHTS)
     out.update(SHINDO)
     out.update(clock_phrases())
     out.update(magnitude_phrases())
@@ -136,6 +174,7 @@ def build_phrases(scope: str) -> dict[str, str]:
     if scope == "full":
         out.update(region_phrases())
         out.update(area_phrases())
+        out.update(zone_phrases())
     return out
 
 

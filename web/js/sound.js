@@ -41,7 +41,8 @@
   var SLOTS = [
     'eew_forecast', 'eew_warning', 'eew_update', 'eew_update_major',
     'quake_info', 'quake_info_shindo', 'quake_info_hypo', 'quake_info_detail',
-    'tsunami_advisory', 'tsunami_warning', 'tsunami_major',
+    'tsunami_alarm', 'tsunami_major', 'tsunami_warning',
+    'tsunami_advisory', 'tsunami_forecast',
     'countdown_tick', 'countdown_final',
     'new_int_0', 'new_int_1', 'new_int_2', 'new_int_3',
     'new_int_4', 'new_int_5', 'new_int_6'
@@ -134,27 +135,42 @@
    * channel を渡すと、その系統で鳴っている音を止めてから鳴らす。
    * 検知音は段が上がるたび、続報音は報が来るたびに鳴るので、
    * 重ねると混ざって 1 つの音のように聞こえてしまう。 */
-  Sound.prototype.playSlot = function (slot, gain, channel, hold) {
+  Sound.prototype.playSlot = function (slot, gain, channel, hold, opts) {
     if (!this.ctx || !this.enabled) return false;
     var buf = this.buffers[slot];
     if (!buf) return false;
-    if (channel) {
+    var now = this.ctx.currentTime;
+    var at = opts && opts.at != null ? Math.max(opts.at, now) : now;
+    // 長い音源を途中で切りたいときは maxSeconds を渡す (津波のチャイムなど)
+    var span = opts && opts.maxSeconds ? Math.min(opts.maxSeconds, buf.duration) : buf.duration;
+
+    if (channel && !(opts && opts.chain)) {
       // 鳴り始めたばかりの音は、次の音で潰さず最後まで聞かせる
       var cur = this.channels[channel];
-      if (cur && this.ctx.currentTime < cur.hold) return true;
+      if (cur && now < cur.hold) return true;
       this.stopChannel(channel);
     }
     var src = this.ctx.createBufferSource();
     var g = this.ctx.createGain();
-    g.gain.value = gain == null ? 1.0 : gain;
+    var vol = gain == null ? 1.0 : gain;
+    g.gain.value = vol;
+    if (span < buf.duration - 0.02) {
+      // 途中で切るのでプツッと鳴らないように終わりを絞る
+      g.gain.setValueAtTime(vol, at + Math.max(span - 0.35, 0));
+      g.gain.linearRampToValueAtTime(0.0001, at + span);
+    }
     src.buffer = buf;
     src.connect(g); g.connect(this.master);
-    src.start();
-    this.noteEffect(buf.duration);
+    src.start(at, 0, span);
+    this.noteEffect(at - now + span);
     if (channel) {
+      var prev = (opts && opts.chain && this.channels[channel]) ? this.channels[channel] : null;
+      var parts = prev ? prev.parts.slice() : [];
+      parts.push({ src: src, gain: g });
       this.channels[channel] = {
-        src: src, gain: g,
-        hold: this.ctx.currentTime + Math.min(hold == null ? 0.3 : hold, buf.duration)
+        parts: parts,
+        hold: Math.max(prev ? prev.hold : 0,
+                       at + Math.min(hold == null ? 0.3 : hold, span))
       };
     }
     return true;
@@ -165,13 +181,15 @@
     var cur = this.channels[channel];
     if (!cur) return;
     this.channels[channel] = null;
-    try {
-      var t = this.ctx.currentTime;
-      cur.gain.gain.cancelScheduledValues(t);
-      cur.gain.gain.setValueAtTime(cur.gain.gain.value, t);
-      cur.gain.gain.linearRampToValueAtTime(0.0001, t + 0.06);
-      cur.src.stop(t + 0.07);
-    } catch (e) { /* 既に止まっていれば何もしない */ }
+    var t = this.ctx.currentTime;
+    (cur.parts || []).forEach(function (part) {
+      try {
+        part.gain.gain.cancelScheduledValues(t);
+        part.gain.gain.setValueAtTime(part.gain.gain.value, t);
+        part.gain.gain.linearRampToValueAtTime(0.0001, t + 0.06);
+        part.src.stop(t + 0.07);
+      } catch (e) { /* 既に止まっていれば何もしない */ }
+    });
   };
 
   Sound.prototype.unlock = function () {
@@ -309,16 +327,36 @@
     }
   };
 
-  /* 津波警報: 低く長い掃引音を繰り返す */
+  /* 津波の発表音。
+   *
+   *   大津波警報・津波警報  チャイム (7 秒で切る) -> 種別の音 -> 読み上げ
+   *   津波注意報            注意報の音 -> 軽い読み上げ
+   *   津波予報              予報の音だけ
+   *
+   * 音源が無い段は合成音の掃引で代える。 */
+  var TSUNAMI_ALARM_SECONDS = 7.0;
+
   Sound.prototype.tsunami = function (level) {
     this.unlock();
-    var slot = level >= 3 ? 'tsunami_major' : (level >= 2 ? 'tsunami_warning' : 'tsunami_advisory');
-    if (this.playSlot(slot, 1.0, 'tsunami', 1.5)) return;
+    if (level >= 2) {
+      var slot = level >= 3 ? 'tsunami_major' : 'tsunami_warning';
+      // チャイムを 7 秒まで鳴らし、そのうしろに種別の音をつなぐ
+      var chime = this.playSlot('tsunami_alarm', 1.0, 'tsunami', TSUNAMI_ALARM_SECONDS,
+                                { maxSeconds: TSUNAMI_ALARM_SECONDS });
+      var at = chime ? this._effectEndsAt : null;
+      if (this.playSlot(slot, 1.0, 'tsunami', 1.5, { at: at, chain: chime })) return;
+      if (chime) return;                      // 種別の音が無くてもチャイムは鳴らす
+    } else if (level === 1) {
+      // 注意報の音源 (tsa02) が無いときは予報の音で代える
+      if (this.playSlot('tsunami_advisory', 1.0, 'tsunami', 1.5)) return;
+      if (this.playSlot('tsunami_forecast', 1.0, 'tsunami', 1.5)) return;
+    } else {
+      if (this.playSlot('tsunami_forecast', 1.0, 'tsunami', 1.5)) return;
+    }
     var reps = level >= 3 ? 5 : 3;
     this.noteEffect(reps * 1.0);
     for (var i = 0; i < reps; i++) {
-      var base = i * 1.0;
-      this.sweep(level >= 3 ? 300 : 360, level >= 3 ? 520 : 560, base, 0.72, 0.5);
+      this.sweep(level >= 3 ? 300 : 360, level >= 3 ? 520 : 560, i * 1.0, 0.72, 0.5);
     }
   };
 
@@ -535,6 +573,14 @@
   var DEPTHS = [0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 120, 150, 200, 250,
                 300, 350, 400, 450, 500, 550, 600, 650, 700];
 
+  /* 津波の段 -> クリップ名 / 予想される高さ -> クリップ名 */
+  var TSU_KIND_CLIP = { 3: 'tsu_major', 2: 'tsu_warning', 1: 'tsu_advisory' };
+  var HEIGHT_CLIP = {
+    '10m超': 'height_10p', '10m': 'height_10', '5m': 'height_5', '3m': 'height_3',
+    '1m': 'height_1', '0.2m': 'height_02', '0.2m未満': 'height_slight'
+  };
+  var TSU_MAX_ZONES = 8;        // 読み上げる予報区の数の上限
+
   /* 用意してあるのは M3.0〜9.5。外れた値は端に寄せる。 */
   function magClip(m) {
     return Math.min(95, Math.max(30, Math.round(Number(m) * 10)));
@@ -639,13 +685,60 @@
                report.maxShindo + '。' + tail);
   };
 
-  Sound.prototype.announceTsunami = function (forecast) {
+  /* 津波警報・大津波警報・津波注意報の読み上げ。
+   *
+   *   #1 大津波警報が次の地域に発表されています。直ちに避難してください。
+   *      宮城県。岩手県。以上の地域で、予想される津波の高さは、10メートル以上です。
+   *   #2 また、津波注意報が、次の地域に発表されています。
+   *      千葉県九十九里・外房。以上の地域で、予想される津波の高さは、1メートルです。
+   *   #3 震源に関する情報。震源地は、宮城県沖。深さ20キロメートル。
+   *      地震の規模を示すマグニチュードは、9.0と、推定されています。
+   *      現在、大津波警報等を発表中です。海岸からは直ちに離れてください。
+   *
+   * 津波注意報だけのときは #1 を軽くしたものだけ、津波予報は効果音だけにする。 */
+  Sound.prototype.announceTsunami = function (forecast, source) {
+    this.unlock();
+    if (!forecast || forecast.maxLevel <= 0) return;    // 津波予報は音だけ
+
+    // 発表の段ごとにまとめ、強いものから読む
+    var byLevel = {};
+    forecast.zones.forEach(function (z) {
+      if (z.level >= 1) (byLevel[z.level] || (byLevel[z.level] = [])).push(z);
+    });
+    var levels = Object.keys(byLevel).map(Number).sort(function (a, b) { return b - a; });
+    if (!levels.length) return;
+
+    var self = this, seq = [];
+    levels.forEach(function (lv, i) {
+      var list = byLevel[lv].slice().sort(function (a, b) { return b.height - a.height; });
+      if (i === 0) {
+        seq.push(TSU_KIND_CLIP[lv], 'tsu_issued');
+        if (lv >= 2) seq.push('tsu_evacuate');       // 注意報では避難を呼びかけない
+      } else {
+        seq.push('tsu_mata', TSU_KIND_CLIP[lv], 'tsu_issued2');
+      }
+      list.slice(0, TSU_MAX_ZONES).forEach(function (z) {
+        seq.push(self.regionClip(z.name), PAUSE);
+      });
+      seq.push('tsu_ijou', HEIGHT_CLIP[list[0].heightClass], 'tsu_desu');
+    });
+
+    if (forecast.maxLevel >= 2 && source) {
+      // #3 震源に関する情報
+      seq.push('hypo_lead', this.regionClip(source.region), PAUSE,
+               'info_depth_lead', 'depth_' + nearestDepth(Number(source.depth)), 'info_km',
+               'mag_' + magClip(source.magnitude), 'info_mag_tail',
+               'tsu_now_lead', TSU_KIND_CLIP[forecast.maxLevel], 'tsu_now_tail');
+    } else if (forecast.maxLevel === 1) {
+      seq.push('tsu_leave_sea');
+    }
+    if (this.playSequence(seq)) return;
+
     var names = forecast.zones.slice(0, 3).map(function (z) { return z.name; }).join('、');
     var text = {
       3: '大津波警報。ただちに高台や避難ビルへ避難してください。',
       2: '津波警報。ただちに海岸から離れ、高台へ避難してください。',
-      1: '津波注意報。海の中や海岸から離れてください。',
-      0: '津波予報。若干の海面変動が予想されます。'
+      1: '津波注意報。海の中や海岸から離れてください。'
     }[forecast.maxLevel] || '津波予報。';
     this.speak(text + '対象は、' + names + 'など。');
   };

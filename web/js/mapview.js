@@ -80,11 +80,19 @@
     var n = s.lat.length, amb = new Float32Array(n), seed = new Int32Array(n);
     for (var i = 0; i < n; i++) {
       amb[i] = global.Util.ambientPGA(s.lat[i], s.lon[i], s.avs30 ? s.avs30[i] : 400);
+      // 海底は脈動 (海のうねりが起こす常時微動) が陸より大きい
+      if (s.seafloor && s.seafloor[i]) amb[i] *= SEAFLOOR_NOISE;
       seed[i] = global.Util.siteSeed(s.lat[i], s.lon[i]);
     }
     this.ambient = amb;
     this.ambientSeed = seed;
     this.noiseTime = 0;
+    // 海底観測点 (S-net・DONET 相当) は震度のタイルにせず、点で色だけ出す
+    this.seafloor = s.seafloor || null;
+  };
+
+  MapView.prototype.isSeafloor = function (i) {
+    return !!(this.seafloor && this.seafloor[i]);
   };
   MapView.prototype.setTsunamiZones = function (z) { this.tsunamiZones = z; };
 
@@ -155,15 +163,45 @@
   /* ---------------- 観測点 ---------------- */
   /* PGA の連続配色をこの段数に量子化して、同じ色をまとめて塗る */
   var PGA_BUCKETS = 56, PGA_LO = -2.1, PGA_HI = 3.0;
+  var SEAFLOOR_NOISE = 3.0;   // 海底の常時微動は陸のおよそ 3 倍
 
   function pgaBucket(gal) {
     var t = (Math.log10(Math.max(gal, 1e-4)) - PGA_LO) / (PGA_HI - PGA_LO);
     return global.Util.clamp(Math.round(t * (PGA_BUCKETS - 1)), 0, PGA_BUCKETS - 1);
   }
 
-  function bucketCSS(b) {
-    return global.Util.pgaCSS(Math.pow(10, PGA_LO + (PGA_HI - PGA_LO) * b / (PGA_BUCKETS - 1)));
+  function bucketGal(b) {
+    return Math.pow(10, PGA_LO + (PGA_HI - PGA_LO) * b / (PGA_BUCKETS - 1));
   }
+
+  function bucketCSS(b) {
+    return global.Util.pgaCSS(bucketGal(b));
+  }
+
+  /* 海底観測点の色。
+   *
+   * 海底の観測点は震度を発表しないので、揺れていないあいだは くすんだ黄緑で
+   * 置いておき、実際に揺れ出したところから陸と同じ強震モニタの配色に移す。
+   * 境目で色が飛ばないように、その間は混ぜる。 */
+  var SEA_IDLE = [122, 124, 48];
+  var SEA_LO = -0.6, SEA_HI = -0.05;      // log10(gal) の移り変わり
+
+  function seafloorCSS(gal) {
+    var lg = Math.log10(Math.max(gal, 1e-4));
+    if (lg >= SEA_HI) return global.Util.pgaCSS(gal);
+    // 静穏時は微動の強さで明るさだけ変える (点が生きて見えるように)
+    var k = global.Util.clamp(0.62 + (lg + 1.6) * 0.42, 0.45, 1.15);
+    var idle = [Math.round(SEA_IDLE[0] * k), Math.round(SEA_IDLE[1] * k),
+                Math.round(SEA_IDLE[2] * k)];
+    if (lg <= SEA_LO) return 'rgb(' + idle[0] + ',' + idle[1] + ',' + idle[2] + ')';
+    var t = (lg - SEA_LO) / (SEA_HI - SEA_LO);
+    var hot = global.Util.pgaRGB(gal);
+    return 'rgb(' + Math.round(idle[0] + (hot[0] - idle[0]) * t) + ',' +
+                    Math.round(idle[1] + (hot[1] - idle[1]) * t) + ',' +
+                    Math.round(idle[2] + (hot[2] - idle[2]) * t) + ')';
+  }
+
+  function seaBucketCSS(b) { return seafloorCSS(bucketGal(b)); }
 
   /* 観測点の見かけの大きさ [gal]。揺れていなければ常時微動がそのまま出る。 */
   MapView.prototype.stationPGA = function (values, i) {
@@ -188,44 +226,53 @@
     var ctx = this.ctx, p = this.proj, U = global.Util;
     var lat = this.stations.lat, lon = this.stations.lon;
     var n = lat.length;
-    var radius = U.clamp(7.0 * Math.pow(p.zoom, 0.40), 6.0, 22.0);
-    var showNumber = radius >= 6.0;
-    var margin = 26;
+    var side = U.clamp(14.0 * Math.pow(p.zoom, 0.40), 12.0, 46.0);
+    var margin = 30;
 
-    var cell = radius * 1.62;
+    // タイルは少し重なる。地震情報の地点震度表示と同じで、詰まったところは
+    // 強い震度が上に乗る。
+    var cell = side * 0.88;
     var cols = Math.ceil((this.cssWidth + margin * 2) / cell) + 1;
+    var isSea = this.seafloor;
+    var sea = [];
     var best = {};
     var i;
 
     // まだ揺れていない観測点も同じ間引きに掛ける。ここで落としてしまうと
     // 波面の外側だけ観測点が消え、地図に不自然な円の縁ができる。
+    // 海底観測点はもともと疎なので間引かず、陸のタイルの取り合いにもしない。
     for (i = 0; i < n; i++) {
       var v = values ? values[i] : -3;
       var pt = p.project(lat[i], lon[i]);
       if (pt[0] < -margin || pt[0] > this.cssWidth + margin ||
           pt[1] < -margin || pt[1] > this.cssHeight + margin) continue;
+      if (isSea && isSea[i]) {
+        sea.push([pt[0], pt[1], this.stationPGA(values, i)]);
+        continue;
+      }
       var key = Math.floor((pt[1] + margin) / cell) * cols + Math.floor((pt[0] + margin) / cell);
       var cur = best[key];
       if (!cur || v > cur[2]) best[key] = [pt[0], pt[1], v, this.stationPGA(values, i)];
     }
 
-    // 震度 0 に届かない観測点は、値に応じて大きさと濃さを落とした点で描く。
-    // 段階を細かく取ることで、波面のところで見た目が急に切り替わらない。
+    // 震度 1 に届かない観測点はタイルにせず (気象庁も発表しない)、
+    // 揺れの大きさに応じて濃さを変えた点で描く。段階を細かく取ることで、
+    // 波面のところで見た目が急に切り替わらない。
     var quiet = new Array(PGA_BUCKETS);
     var groups = {};
     for (var key2 in best) {
       var e = best[key2];
-      if (e[2] < -0.5) {
+      if (e[2] < 0.5) {
         var qb = pgaBucket(e[3]);
         (quiet[qb] || (quiet[qb] = [])).push(e);
         continue;
       }
       var cls0 = U.shindoClass(e[2]);
-      (groups[cls0] || (groups[cls0] = [])).push([e[0], e[1]]);
+      (groups[cls0] || (groups[cls0] = [])).push(e);
     }
 
     ctx.save();
-    var qr = Math.max(radius * 0.44, 2.4);
+    var qr = Math.max(side * 0.22, 2.4);
     for (var qb2 = 0; qb2 < PGA_BUCKETS; qb2++) {
       var qlist = quiet[qb2];
       if (!qlist) continue;
@@ -237,34 +284,10 @@
       ctx.fillStyle = bucketCSS(qb2);
       ctx.fill(qpath);
     }
-
-    var order = U.shindoOrder;
-    ctx.lineWidth = Math.max(1.6, radius * 0.17);
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.font = '800 ' + Math.round(radius * 1.18) + 'px "Hiragino Sans", "Noto Sans JP", system-ui, sans-serif';
-
-    for (var k = 0; k < order.length; k++) {
-      var list = groups[order[k]];
-      if (!list) continue;
-      var path = new Path2D();
-      for (i = 0; i < list.length; i++) {
-        path.moveTo(list[i][0] + radius, list[i][1]);
-        path.arc(list[i][0], list[i][1], radius, 0, Math.PI * 2);
-      }
-      ctx.fillStyle = U.shindoColor(order[k]);
-      ctx.strokeStyle = 'rgba(255,255,255,0.95)';
-      ctx.fill(path);
-      ctx.stroke(path);
-      if (showNumber) {
-        ctx.fillStyle = U.shindoTextColor(order[k]);
-        var label = U.shindoShort(order[k]);
-        for (i = 0; i < list.length; i++) {
-          ctx.fillText(label, list[i][0], list[i][1] + radius * 0.04);
-        }
-      }
-    }
     ctx.restore();
+
+    this.drawSeafloorDots(sea, qr);
+    this.drawShindoTiles(groups, side);
   };
 
   /* 色だけの円 (強震モニタ風の連続配色) */
@@ -274,7 +297,8 @@
     var n = lat.length;
     var radius = U.clamp(2.6 * Math.pow(p.zoom, 0.35), 2.0, 7.0);
     var margin = 20;
-    var paths = new Array(PGA_BUCKETS);
+    var paths = new Array(PGA_BUCKETS * 2);
+    var sea = this.seafloor;
     var i, b;
 
     // 揺れていない観測点も含め、全点を同じ大きさの色の円で塗る
@@ -283,19 +307,85 @@
       if (pt[0] < -margin || pt[0] > this.cssWidth + margin ||
           pt[1] < -margin || pt[1] > this.cssHeight + margin) continue;
       b = pgaBucket(this.stationPGA(values, i));
+      if (sea && sea[i]) b += PGA_BUCKETS;           // 海底は別のまとまりで塗る
       if (!paths[b]) paths[b] = new Path2D();
       paths[b].moveTo(pt[0] + radius, pt[1]);
       paths[b].arc(pt[0], pt[1], radius, 0, Math.PI * 2);
     }
 
     ctx.save();
-    for (b = 0; b < PGA_BUCKETS; b++) {
+    for (b = 0; b < PGA_BUCKETS * 2; b++) {
       if (!paths[b]) continue;
-      var gal = Math.pow(10, PGA_LO + (PGA_HI - PGA_LO) * b / (PGA_BUCKETS - 1));
-      ctx.fillStyle = U.pgaCSS(gal);
+      var isSea = b >= PGA_BUCKETS;
+      var gal = bucketGal(isSea ? b - PGA_BUCKETS : b);
+      ctx.fillStyle = isSea ? seafloorCSS(gal) : U.pgaCSS(gal);
       ctx.shadowBlur = gal >= 5 ? 3 + Math.log10(gal / 5) * 6 : 0;
       ctx.shadowColor = ctx.fillStyle;
       ctx.fill(paths[b]);
+    }
+    ctx.restore();
+  };
+
+  /* ---------------- 地点震度のタイル ----------------
+   * 角の丸い四角に震度を書いたもの。5弱・5強などは記号を肩に小さく付ける。
+   * 弱いものから順に描いて、重なったときに強い震度が上に来るようにする。
+   */
+  var TILE_FONT = '"Hiragino Sans", "Noto Sans JP", "Yu Gothic", system-ui, sans-serif';
+
+  function tileFont(px) { return '900 ' + px.toFixed(1) + 'px ' + TILE_FONT; }
+
+  MapView.prototype.drawShindoTiles = function (groups, side) {
+    var ctx = this.ctx, U = global.Util;
+    var order = U.shindoOrder;
+    var r = Math.max(2.0, side * 0.17);
+    var half = side / 2, dy = side * 0.03;
+    var big = tileFont(side * 0.60), small = tileFont(side * 0.40);
+    ctx.save();
+    ctx.textBaseline = 'middle';
+    ctx.lineJoin = 'round';
+    for (var k = 0; k < order.length; k++) {
+      var list = groups[order[k]];
+      if (!list) continue;
+      var cls = order[k], i;
+
+      // 塗りはまとめて 1 つの影を落とす。縁は 1 枚ずつなぞるので、
+      // 同じ震度どうしが重なっても継ぎ目が見える。
+      var path = new Path2D();
+      for (i = 0; i < list.length; i++) {
+        roundRectPath(path, list[i][0] - half, list[i][1] - half, side, side, r);
+      }
+      ctx.shadowColor = 'rgba(0, 0, 0, 0.45)';
+      ctx.shadowBlur = side * 0.18;
+      ctx.shadowOffsetY = side * 0.06;
+      ctx.fillStyle = U.shindoColor(cls);
+      ctx.fill(path);
+      ctx.shadowColor = 'transparent';
+      ctx.shadowBlur = 0;
+      ctx.shadowOffsetY = 0;
+      ctx.lineWidth = Math.max(1.0, side * 0.040);
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.42)';
+      ctx.stroke(path);
+
+      // 文字。フォントの切り替えは高いので、数字と肩の記号を別々にまとめて描く。
+      var text = U.shindoShort(cls);
+      var base = text.charAt(0), mark = text.length > 1 ? text.charAt(1) : '';
+      ctx.fillStyle = U.shindoTextColor(cls);
+      ctx.font = big;
+      if (!mark) {
+        ctx.textAlign = 'center';
+        for (i = 0; i < list.length; i++) ctx.fillText(base, list[i][0], list[i][1] + dy);
+        continue;
+      }
+      var bw = ctx.measureText(base).width;
+      ctx.font = small;
+      var mw = ctx.measureText(mark).width;
+      var left = -(bw + mw) / 2;
+      ctx.textAlign = 'left';
+      ctx.font = big;
+      for (i = 0; i < list.length; i++) ctx.fillText(base, list[i][0] + left, list[i][1] + dy);
+      ctx.font = small;
+      var mx = left + bw, my = dy - side * 0.17;
+      for (i = 0; i < list.length; i++) ctx.fillText(mark, list[i][0] + mx, list[i][1] + my);
     }
     ctx.restore();
   };
@@ -442,33 +532,62 @@
     ctx.restore();
   };
 
-  /* 確定表示のときの観測点 (区域の塗り分けを邪魔しない小さな点) */
-  MapView.prototype.drawStationDots = function (values) {
-    if (!this.stations || !this.showStations) return;
-    var ctx = this.ctx, p = this.proj, U = global.Util;
+  /* 確定表示 (地震情報) の地点震度。区域の塗り分けの上にタイルを重ねる。 */
+  MapView.prototype.drawStationShindo = function (values) {
+    if (!this.stations || !this.showStations || !values) return;
+    var p = this.proj, U = global.Util;
     var lat = this.stations.lat, lon = this.stations.lon;
-    var n = lat.length, margin = 16;
-    var r = U.clamp(1.6 * Math.pow(p.zoom, 0.3), 1.3, 3.4);
-    var groups = {};
-    for (var i = 0; i < n; i++) {
-      var v = values ? values[i] : -3;
-      if (!(v >= 0.5)) continue;
+    var n = lat.length, margin = 30;
+    var side = U.clamp(14.0 * Math.pow(p.zoom, 0.40), 12.0, 46.0);
+    var cell = side * 0.88;
+    var cols = Math.ceil((this.cssWidth + margin * 2) / cell) + 1;
+    var best = {}, sea = [], i;
+
+    for (i = 0; i < n; i++) {
+      var v = values[i];
       var pt = p.project(lat[i], lon[i]);
       if (pt[0] < -margin || pt[0] > this.cssWidth + margin ||
           pt[1] < -margin || pt[1] > this.cssHeight + margin) continue;
-      var cls = U.shindoClass(v);
-      var path = groups[cls] || (groups[cls] = new Path2D());
-      path.moveTo(pt[0] + r, pt[1]);
-      path.arc(pt[0], pt[1], r, 0, Math.PI * 2);
+      if (this.isSeafloor(i)) {
+        sea.push([pt[0], pt[1], U.pgaFromIntensity(v)]);
+        continue;
+      }
+      if (!(v >= 0.5)) continue;          // 震度 1 未満は発表しないので出さない
+      var key = Math.floor((pt[1] + margin) / cell) * cols + Math.floor((pt[0] + margin) / cell);
+      var cur = best[key];
+      if (!cur || v > cur[2]) best[key] = [pt[0], pt[1], v];
+    }
+
+    this.drawSeafloorDots(sea, Math.max(side * 0.22, 2.4));
+
+    var groups = {};
+    for (var key2 in best) {
+      var e = best[key2];
+      var cls = U.shindoClass(e[2]);
+      (groups[cls] || (groups[cls] = [])).push(e);
+    }
+    this.drawShindoTiles(groups, side);
+  };
+
+  /* 海底観測点。震度のタイルは付けず、強震モニタと同じ連続配色の点で出す。 */
+  MapView.prototype.drawSeafloorDots = function (list, r) {
+    if (!list.length) return;
+    var ctx = this.ctx;
+    var paths = new Array(PGA_BUCKETS);
+    for (var i = 0; i < list.length; i++) {
+      var b = pgaBucket(list[i][2]);
+      if (!paths[b]) paths[b] = new Path2D();
+      paths[b].moveTo(list[i][0] + r, list[i][1]);
+      paths[b].arc(list[i][0], list[i][1], r, 0, Math.PI * 2);
     }
     ctx.save();
-    ctx.globalAlpha = 0.85;
-    for (var cls2 in groups) {
-      ctx.fillStyle = U.shindoColor(cls2);
-      ctx.fill(groups[cls2]);
-      ctx.lineWidth = 0.7;
-      ctx.strokeStyle = 'rgba(255,255,255,.7)';
-      ctx.stroke(groups[cls2]);
+    for (b = 0; b < PGA_BUCKETS; b++) {
+      if (!paths[b]) continue;
+      var gal = bucketGal(b);
+      ctx.fillStyle = seaBucketCSS(b);
+      ctx.shadowBlur = gal >= 5 ? 3 + Math.log10(gal / 5) * 6 : 0;
+      ctx.shadowColor = ctx.fillStyle;
+      ctx.fill(paths[b]);
     }
     ctx.restore();
   };
@@ -785,12 +904,17 @@
 
   function roundRect(ctx, x, y, w, h, r) {
     ctx.beginPath();
-    ctx.moveTo(x + r, y);
-    ctx.arcTo(x + w, y, x + w, y + h, r);
-    ctx.arcTo(x + w, y + h, x, y + h, r);
-    ctx.arcTo(x, y + h, x, y, r);
-    ctx.arcTo(x, y, x + w, y, r);
-    ctx.closePath();
+    roundRectPath(ctx, x, y, w, h, r);
+  }
+
+  /* ctx にも Path2D にも同じように積める角丸の四角 */
+  function roundRectPath(path, x, y, w, h, r) {
+    path.moveTo(x + r, y);
+    path.arcTo(x + w, y, x + w, y + h, r);
+    path.arcTo(x + w, y + h, x, y + h, r);
+    path.arcTo(x, y + h, x, y, r);
+    path.arcTo(x, y, x + w, y, r);
+    path.closePath();
   }
 
   global.MapView = MapView;

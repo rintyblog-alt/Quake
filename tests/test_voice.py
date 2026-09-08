@@ -37,7 +37,7 @@ def js_array(name: str) -> list[str]:
 
 def test_定型句のクリップ名がすべて用意されている(phrases):
     """sound.js に直に書いてあるクリップ名 ('info_lead' など) の突き合わせ。"""
-    used = set(re.findall(r"'((?:flash|info|ampm)_[a-z_]+)'", SOUND_JS))
+    used = set(re.findall(r"'((?:flash|info|ampm|tsu|hypo)_[a-z_0-9]+)'", SOUND_JS))
     assert used, "クリップ名が拾えていない"
     missing = sorted(used - set(phrases))
     assert not missing, f"読み上げの部品が足りません: {missing}"
@@ -102,7 +102,7 @@ def test_原稿が指定どおりつながる(phrases):
         return "".join(p[k] for k in keys)
 
     flash = join("flash_lead", "shindo_6p", "flash_wo") + "宮城県北部" + join("。", "flash_tail")
-    assert flash == "地震速報。最大震度6強を。宮城県北部。で観測しました。"
+    assert flash == "震度速報。最大震度6強を。宮城県北部。で観測しました。"
 
     def info(tsunami: bool) -> str:
         return (join("info_lead", "ampm_pm", "hour_3", "min_47", "info_koro",
@@ -123,6 +123,59 @@ def test_原稿が指定どおりつながる(phrases):
         "現在、津波予報等を発表中です。震源地は、宮城県沖。深さ60"
         "キロメートル。地震の規模を示すマグニチュードは、7.3と、推定されています。"
     )
+
+
+def test_津波の原稿が指定どおりつながる(phrases):
+    p = dict(phrases)
+    p["。"] = "。"
+
+    def join(*keys: str) -> str:
+        return "".join(p[k] for k in keys)
+
+    # #1 いちばん強い段
+    first = (join("tsu_major", "tsu_issued", "tsu_evacuate") + "宮城県" + "。" + "岩手県" + "。"
+             + join("tsu_ijou", "height_10p", "tsu_desu"))
+    assert first == (
+        "大津波警報が次の地域に発表されています。直ちに避難してください。"
+        "宮城県。岩手県。以上の地域で、予想される津波の高さは、10メートル以上です。"
+    )
+
+    # #2 ほかの段が続くとき
+    second = (join("tsu_mata", "tsu_advisory", "tsu_issued2") + "伊豆諸島" + "。"
+              + join("tsu_ijou", "height_1", "tsu_desu"))
+    assert second == (
+        "また、津波注意報が、次の地域に発表されています。"
+        "伊豆諸島。以上の地域で、予想される津波の高さは、1メートルです。"
+    )
+
+    # #3 震源に関する情報
+    third = (join("hypo_lead") + "宮城県沖" + join("。", "info_depth_lead", "depth_20",
+             "info_km", "mag_90", "info_mag_tail", "tsu_now_lead", "tsu_major", "tsu_now_tail"))
+    assert third == (
+        "震源に関する情報。震源地は、宮城県沖。深さ20キロメートル。"
+        "地震の規模を示すマグニチュードは、9.0と、推定されています。"
+        "現在、大津波警報等を発表中です。海岸からは直ちに離れてください。"
+    )
+
+    # 津波注意報だけのとき (軽い読み上げ)
+    only = (join("tsu_advisory", "tsu_issued") + "千葉県九十九里・外房" + "。"
+            + join("tsu_ijou", "height_02", "tsu_desu", "tsu_leave_sea"))
+    assert only == (
+        "津波注意報が次の地域に発表されています。千葉県九十九里・外房。"
+        "以上の地域で、予想される津波の高さは、20センチです。海の中や海岸から離れてください。"
+    )
+
+
+def test_津波予報区と高さがすべて読める(phrases):
+    texts = set(phrases.values())
+    zones = json.loads((ROOT / "web" / "data" / "tsunami_zones.json").read_text("utf-8"))
+    for z in zones["zones"]:
+        assert z["name"] in texts, z["name"]
+    # sim/tsunami.py が返す高さ階級はすべてクリップがある
+    body = re.search(r"var HEIGHT_CLIP = \{(.*?)\};", SOUND_JS, re.S)
+    assert body
+    for cls, key in re.findall(r"'([^']+)': '([a-z0-9_]+)'", body.group(1)):
+        assert key in phrases, (cls, key)
 
 
 def test_句点の一拍がsound_jsに入っている():

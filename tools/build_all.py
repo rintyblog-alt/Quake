@@ -7,7 +7,8 @@
     4. build_subdivision_polygons  細分区域と都道府県界のポリゴン
                             (市区町村界を融合する。1 の japan.geojson を置き換えるので
                              陸域マスクより先に実行する)
-    5. build_bathymetry     海底地形の陰影図 (GMRT から取得)
+    5. build_seafloor       海底地震計 (S-net・DONET 相当) を観測点に足す
+    6. build_bathymetry     海底地形の陰影図 (GMRT から取得)
 
 生データ (data/raw/) が揃っていることが前提。揃っていない場合は
 tools/fetch_sources.py と tools/fetch_avs30.py を先に実行する。
@@ -25,6 +26,7 @@ STEPS = [
     ("観測点・震央地名・地図・走時表", ["prepare_data.py", "--map-tolerance", "0.0012",
                                         "--map-min-area", "8e-6"]),
     ("細分区域と都道府県界のポリゴン", ["build_subdivision_polygons.py"]),
+    ("海底地震計 (S-net・DONET 相当)", ["build_seafloor.py"]),
     ("陸域マスク", ["build_landmask.py"]),
     ("津波予報区の沿岸線", ["build_tsunami_zones.py"]),
     ("海底地形の陰影図", ["build_bathymetry.py"]),

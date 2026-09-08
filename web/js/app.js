@@ -176,6 +176,11 @@
   /* ---------------- 再生対象 ---------------- */
   App.adoptScenario = function (payload) {
     var s = payload.stations, self = this;
+    // 観測点を足したあとに計算し直していないシナリオは、値が 1 点ずつずれる
+    if (this.stations && s.count !== this.stations.count) {
+      throw new Error('シナリオの観測点数 (' + s.count + ') が今の観測点網 (' +
+                      this.stations.count + ') と合いません。計算し直してください。');
+    }
     var rt = U.decodeInt8(s.realtime), fin = U.decodeInt8(s.final);
     var scale = s.scale || 10, nt = payload.timeline.count, ns = s.count;
     var dt = payload.timeline.dt;
@@ -670,7 +675,7 @@
       el('coast-legend').classList.remove('hidden');
       el('legend').classList.add('hidden');
       this.sound.tsunami(cur.tsunami.maxLevel);
-      this.sound.announceTsunami(cur.tsunami);
+      this.sound.announceTsunami(cur.tsunami, cur.source);
     }
   };
 
@@ -802,8 +807,7 @@
 
       if (this.phase === 'final') {
         v.drawObservedSubdivisions(this.areaIntensity);
-        v.drawStationDots(cur.final);
-        v.drawSubdivisionBadges(this.areaIntensity);
+        v.drawStationShindo(cur.final);
         if (cur.tsunami && this.firedTsunami) v.drawTsunami(cur.tsunami, this.t);
       } else {
         if (cur.tsunami && this.firedTsunami) v.drawTsunami(cur.tsunami, this.t);

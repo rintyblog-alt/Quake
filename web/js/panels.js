@@ -7,21 +7,21 @@
 
   var Panels = {};
 
-  /* 規模・深さのバーの色 */
+  /* 規模・深さのバーの色 (震度と同じ配色をそのまま使う) */
   function magnitudeColor(m) {
-    if (m >= 8.0) return '#e838c8';
-    if (m >= 7.0) return '#e03a2a';
-    if (m >= 6.0) return '#f2941f';
-    if (m >= 5.0) return '#d9e04a';
-    if (m >= 4.0) return '#46c9a0';
-    return '#3f8fd8';
+    if (m >= 8.0) return U.shindoColor('6強');
+    if (m >= 7.0) return U.shindoColor('5弱');
+    if (m >= 6.0) return U.shindoColor('4');
+    if (m >= 5.0) return U.shindoColor('3');
+    if (m >= 4.0) return U.shindoColor('2');
+    return U.shindoColor('1');
   }
   function depthColor(d) {
-    if (d < 20) return '#e03a2a';
-    if (d < 50) return '#f2941f';
-    if (d < 100) return '#d9e04a';
-    if (d < 300) return '#46c9a0';
-    return '#3f8fd8';
+    if (d < 20) return U.shindoColor('5弱');
+    if (d < 50) return U.shindoColor('4');
+    if (d < 100) return U.shindoColor('3');
+    if (d < 300) return U.shindoColor('2');
+    return U.shindoColor('1');
   }
 
   function setBadge(node, intensity) {
@@ -272,7 +272,7 @@
 
   /* ---------------- 凡例 ---------------- */
   /* 参照している地震モニタと同じく、震度 5弱 から 1 までの 5 段で示す */
-  var LEGEND_LEVELS = ['5弱', '4', '3', '2', '1'];
+  var LEGEND_LEVELS = ['7', '6強', '6弱', '5強', '5弱', '4', '3', '2', '1'];
 
   Panels.drawLegend = function (style) {
     var c = el('legend-bar');
