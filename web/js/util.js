@@ -94,7 +94,36 @@
     return Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
   }
 
-  /* 観測点の常時微動の大きさ [gal] */
+  /* 常時微動は時間とともに揺らぐ。交通や風は一定ではないので、
+   * 強震モニタの平常時の画面は絶えずちらついて見える。
+   * 観測点ごとの種と時刻から、なめらかに変わる倍率を作る。 */
+  var FLICKER_LOG10 = 0.32;     // 揺らぎの幅 (log10 gal)
+  var FLICKER_SLOW = 0.45;      // ゆっくりした成分 [Hz]
+  var FLICKER_FAST = 1.6;       // 速い成分 [Hz]
+
+  /* 観測点を区別するための種 (座標から決まる) */
+  function siteSeed(lat, lon) {
+    var a = Math.imul(Math.round(lat * 1000) | 0, 0x8DA6B343);
+    var b = Math.imul(Math.round(lon * 1000) | 0, 0xD8163841);
+    return (a ^ b) | 0;
+  }
+
+  /* 整数点の値を滑らかにつないだ雑音 (0-1、平均 0.5) */
+  function smoothNoise(seed, x) {
+    var i = Math.floor(x), f = x - i;
+    var a = fmix32((seed ^ Math.imul(i, 0x27D4EB2F)) | 0) / 4294967296;
+    var b = fmix32((seed ^ Math.imul(i + 1, 0x27D4EB2F)) | 0) / 4294967296;
+    return a + (b - a) * (f * f * (3 - 2 * f));
+  }
+
+  /* 常時微動に掛ける倍率 */
+  function ambientFlicker(seed, t) {
+    var n = 0.7 * smoothNoise(seed, t * FLICKER_SLOW)
+          + 0.3 * smoothNoise(seed ^ 0x5BF03635, t * FLICKER_FAST);
+    return Math.pow(10, FLICKER_LOG10 * (n - 0.5) * 2);
+  }
+
+  /* 観測点の常時微動の大きさ [gal] (中央値) */
   function ambientPGA(lat, lon, avs30) {
     var v = Math.min(1500, Math.max(100, avs30 || 400));
     var arv = Math.pow(10, 1.83 - 0.66 * Math.log10(v));
@@ -244,6 +273,8 @@
     realtimeRGB: realtimeRGB,
     realtimeCSS: realtimeCSS,
     ambientPGA: ambientPGA,
+    ambientFlicker: ambientFlicker,
+    siteSeed: siteSeed,
     pgaFromIntensity: pgaFromIntensity,
     pgaCSS: pgaCSS,
     pgaTicks: PGA_TICKS,

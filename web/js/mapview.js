@@ -76,11 +76,15 @@
   MapView.prototype.setStations = function (s) {
     this.stations = s;
     // 観測点ごとの常時微動 [gal]。揺れていないときの色はこれで決まる。
-    var n = s.lat.length, amb = new Float32Array(n);
+    // 実際の微動は絶えず変わるので、種を持たせて時刻で揺らがせる。
+    var n = s.lat.length, amb = new Float32Array(n), seed = new Int32Array(n);
     for (var i = 0; i < n; i++) {
       amb[i] = global.Util.ambientPGA(s.lat[i], s.lon[i], s.avs30 ? s.avs30[i] : 400);
+      seed[i] = global.Util.siteSeed(s.lat[i], s.lon[i]);
     }
     this.ambient = amb;
+    this.ambientSeed = seed;
+    this.noiseTime = 0;
   };
   MapView.prototype.setTsunamiZones = function (z) { this.tsunamiZones = z; };
 
@@ -163,14 +167,22 @@
 
   /* 観測点の見かけの大きさ [gal]。揺れていなければ常時微動がそのまま出る。 */
   MapView.prototype.stationPGA = function (values, i) {
-    var amb = this.ambient ? this.ambient[i] : 0.02;
+    var amb = 0.02;
+    if (this.ambient) {
+      amb = this.ambient[i] * global.Util.ambientFlicker(this.ambientSeed[i], this.noiseTime);
+    }
     if (!values) return amb;
-    var v = values[i];
-    return Math.max(global.Util.pgaFromIntensity(v), amb);
+    return Math.max(global.Util.pgaFromIntensity(values[i]), amb);
+  };
+
+  /* 微動の揺らぎに使う時刻。再生を止めていても進める。 */
+  MapView.prototype.tickNoise = function () {
+    this.noiseTime = (global.performance ? global.performance.now() : Date.now()) / 1000;
   };
 
   MapView.prototype.drawStations = function (values) {
     if (!this.stations || !this.showStations) return;
+    this.tickNoise();
     if (this.stationStyle === 'color') return this.drawStationsColor(values);
 
     var ctx = this.ctx, p = this.proj, U = global.Util;
