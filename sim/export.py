@@ -43,7 +43,9 @@ def to_payload(result: ScenarioResult) -> dict:
     t_p = np.where(np.isfinite(result.t_p), result.t_p, -1.0)
     t_s = np.where(np.isfinite(result.t_s), result.t_s, -1.0)
 
-    max_idx = int(np.argmax(final))
+    # 海底の観測点は震度を発表しないので、最大震度の対象から外す
+    max_idx = land_argmax(result, final)
+    max_final = float(final[max_idx])
 
     payload = {
         "format": FORMAT_VERSION,
@@ -63,8 +65,8 @@ def to_payload(result: ScenarioResult) -> dict:
             "dip": cfg.dip,
             "rake": cfg.rake,
             "region": result.region_name,
-            "maxIntensity": round(float(final[max_idx]), 1),
-            "maxShindo": shindo_class(float(final[max_idx])),
+            "maxIntensity": round(max_final, 1),
+            "maxShindo": shindo_class(max_final),
             "fault": result.fault.summary(),
             "rupture": {
                 "lat": [round(float(v), 4) for v in result.fault.sub_lat],
@@ -107,10 +109,25 @@ def write(result: ScenarioResult, path: Path) -> Path:
     return path
 
 
+def land_argmax(result: ScenarioResult, final: np.ndarray) -> int:
+    """陸の観測点のうち計測震度が最大のもの。
+
+    海底地震計 (S-net・DONET 相当) では気象庁も震度を発表しないので、
+    最大震度や地震情報には数えない。
+    """
+    sea = result.seafloor if result.seafloor is not None else np.zeros(final.size, dtype=bool)
+    return int(np.argmax(np.where(np.asarray(sea, dtype=bool), -99.0, final)))
+
+
+def land_max(result: ScenarioResult, final: np.ndarray) -> float:
+    return float(final[land_argmax(result, final)])
+
+
 def index_entry(result: ScenarioResult, filename: str) -> dict:
     """シナリオ一覧に載せる要約。"""
     cfg = result.config
     final = np.where(np.isfinite(result.final), result.final, INTENSITY_MIN)
+    max_final = land_max(result, final)
     return {
         "file": filename,
         "name": cfg.name,
@@ -118,8 +135,8 @@ def index_entry(result: ScenarioResult, filename: str) -> dict:
         "magnitude": cfg.magnitude,
         "depth": cfg.depth_km,
         "kind": cfg.kind,
-        "maxIntensity": round(float(final.max()), 1),
-        "maxShindo": shindo_class(float(final.max())),
+        "maxIntensity": round(max_final, 1),
+        "maxShindo": shindo_class(max_final),
         "originTime": cfg.resolved_origin().isoformat(),
         "tsunami": result.tsunami.max_grade if result.tsunami is not None else None,
         "aftershocks": len(result.aftershocks),

@@ -37,7 +37,7 @@ def js_array(name: str) -> list[str]:
 
 def test_定型句のクリップ名がすべて用意されている(phrases):
     """sound.js に直に書いてあるクリップ名 ('info_lead' など) の突き合わせ。"""
-    used = set(re.findall(r"'((?:flash|info|ampm|tsu|hypo)_[a-z_0-9]+)'", SOUND_JS))
+    used = set(re.findall(r"'((?:flash|info|ampm|tsu|hypo|detect)_[a-z_0-9]+|eew_tail)'", SOUND_JS))
     assert used, "クリップ名が拾えていない"
     missing = sorted(used - set(phrases))
     assert not missing, f"読み上げの部品が足りません: {missing}"
@@ -123,6 +123,18 @@ def test_原稿が指定どおりつながる(phrases):
         "現在、津波予報等を発表中です。震源地は、宮城県沖。深さ60"
         "キロメートル。地震の規模を示すマグニチュードは、7.3と、推定されています。"
     )
+
+
+def test_緊急地震速報の原稿がつながる(phrases):
+    p = phrases
+    assert "宮城県沖" + p["eew_tail"] + p["shindo_6p"] == "宮城県沖で地震。推定最大震度6強"
+
+
+def test_揺れの検知の原稿がつながる(phrases):
+    assert phrases["detect_tail"] == "で揺れを検出。"
+    assert "千葉県南部" + phrases["detect_tail"] == "千葉県南部で揺れを検出。"
+    # 細分区域の名前はすべてクリップがある (前の試験で確かめている)
+    assert "detect_tail" in phrases
 
 
 def test_津波の原稿が指定どおりつながる(phrases):

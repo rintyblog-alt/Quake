@@ -66,6 +66,21 @@ _CORR_FAR = (-0.80, 0.45, -1.20, 0.08)    # 切片, 傾き, 下限, 上限 (基�
 _CORR_NEAR = (-0.50, 0.50, -0.50, 0.35)   # 同上 (基準 M4.5)
 
 
+# 遠方での上ぶれを補正する項。
+#
+# 2011 年三陸沖 (東京 380km で 5強、大阪 770km で 3、札幌 560km で 3〜4)、
+# 2024 年能登沖 (東京 305km で 3) と突き合わせると、300km より遠くで
+# 0.3〜0.5 ほど高く出ていた。距離とともに効く一定の減衰として引く。
+_LONG_REF_KM = 400.0
+_LONG_AMP = 0.55
+
+
+def long_range_correction(distance_km) -> np.ndarray:
+    """遠方の計測震度に足す補正 (負の値)。"""
+    r = np.maximum(np.asarray(distance_km, dtype=float), 0.0)
+    return -_LONG_AMP * (1.0 - np.exp(-r / _LONG_REF_KM))
+
+
 def magnitude_distance_correction(mw: float, distance_km) -> np.ndarray:
     """司・翠川 (1999) を波形合成に合わせる補正 [計測震度]。
 
@@ -87,7 +102,7 @@ def magnitude_distance_correction(mw: float, distance_km) -> np.ndarray:
     far = np.clip(b0 + b1 * (mw - 5.0), lo, hi)
     b0, b1, lo, hi = _CORR_NEAR
     near = np.clip(b0 + b1 * (mw - 4.5), lo, hi)
-    return near + (far - near) * g
+    return near + (far - near) * g + long_range_correction(r)
 
 
 # 火山フロント (太平洋プレート側の島弧: 千島・東北・伊豆小笠原)。

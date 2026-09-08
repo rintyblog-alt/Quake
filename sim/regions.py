@@ -25,6 +25,9 @@ DATA_DIR = Path(__file__).resolve().parent.parent / "web" / "data"
 # 陸域マスクが使えない場合に、最近傍観測点までの距離で陸域とみなすしきい値 [km]
 LAND_THRESHOLD_KM = 15.0
 
+# 国内の海域名の代表点からこれだけ離れていて、遠地の地名のほうが近ければそちらを使う [km]
+WORLD_THRESHOLD_KM = 300.0
+
 
 @dataclass
 class Region:
@@ -65,6 +68,11 @@ class EpicenterRegions:
         self.sea_lat = np.array(sea_lat, dtype=float)
         self.sea_lon = np.array(sea_lon, dtype=float)
 
+        # 遠地地震の地名。国内より粗く、代表点との最近傍だけで決める。
+        self.world_regions = [r for r in self.regions if r.type == "world"]
+        self.world_lat = np.array([r.lat for r in self.world_regions], dtype=float)
+        self.world_lon = np.array([r.lon for r in self.world_regions], dtype=float)
+
         try:
             self.landmask: LandMask | None = LandMask(d)
         except (FileNotFoundError, KeyError, ValueError):
@@ -97,6 +105,13 @@ class EpicenterRegions:
         # 海域アンカーが遠く、陸の観測点がごく近い場合は陸域名を採る
         if d_st[i] < 3.0 and d_st[i] < d_sea[j] and land_code in self.by_code:
             return self.by_code[land_code]
+
+        # 国内の区分から遠く離れていれば、遠地地震の大まかな地名を使う
+        if self.world_regions and d_sea[j] > WORLD_THRESHOLD_KM:
+            d_w = haversine_array(lat, lon, self.world_lat, self.world_lon)
+            k = int(np.argmin(d_w))
+            if d_w[k] < d_sea[j]:
+                return self.world_regions[k]
         return self.sea_regions[j]
 
     def name_at(self, lat: float, lon: float) -> str:

@@ -61,8 +61,20 @@ def test_magnitude_correction_is_stronger_for_small_events():
     assert corr(7.0, far) == pytest.approx(corr(9.0, far))
     # 震源直上ではほとんど効かず、遠方で効く
     assert abs(corr(5.0, 0.0)) < abs(corr(5.0, 300.0))
-    # M5 の遠方は 0.8 震度ほど下げる
-    assert corr(5.0, 300.0) == pytest.approx(-0.80, abs=0.05)
+    # M5 の遠方は 0.8 震度ほど下げる (加えて遠方の一律補正が乗る)
+    from sim.gmpe import long_range_correction
+
+    assert corr(5.0, 300.0) - long_range_correction(300.0) == pytest.approx(-0.80, abs=0.05)
+
+
+def test_long_range_correction_grows_with_distance():
+    """遠方の上ぶれを引く項。近くでは効かず、遠くで頭打ちになる。"""
+    from sim.gmpe import long_range_correction as lrc
+
+    assert lrc(0.0) == pytest.approx(0.0, abs=1e-6)
+    assert lrc(10.0) > lrc(300.0) > lrc(800.0) > lrc(2000.0)
+    assert lrc(400.0) == pytest.approx(-0.35, abs=0.03)
+    assert lrc(5000.0) == pytest.approx(-0.55, abs=0.02)
 
 
 def test_fore_arc_weight_separates_pacific_and_japan_sea_sides():

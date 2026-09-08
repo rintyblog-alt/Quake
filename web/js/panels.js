@@ -51,10 +51,14 @@
     el('eew-origin').textContent = originDate
       ? U.formatDate(originDate) + ' ' + U.formatClock(originDate) + ' 発生' : '';
 
+    // 推定最大震度の帯は、震度の配色をそのまま使う
     var box = el('eew-shindo-box');
     box.classList.toggle('forecast', !warn);
-    el('eew-shindo-value').innerHTML = report.maxIntensity <= -2.9
-      ? '-' : shindoHTML(U.shindoClass(report.maxIntensity));
+    var known = report.maxIntensity > -2.9;
+    var cls = U.shindoClass(report.maxIntensity);
+    box.style.background = known ? U.shindoColor(cls) : '#38465c';
+    box.style.color = known ? U.shindoTextColor(cls) : '#fff';
+    el('eew-shindo-value').innerHTML = known ? shindoHTML(cls) : '-';
 
     el('eew-magnitude').textContent = Number(report.magnitude).toFixed(1);
     el('meter-mag-bar').style.background = magnitudeColor(report.magnitude);
@@ -279,6 +283,10 @@
   /* ---------------- 凡例 ---------------- */
   /* 参照している地震モニタと同じく、震度 5弱 から 1 までの 5 段で示す */
   var LEGEND_LEVELS = ['7', '6強', '6弱', '5強', '5弱', '4', '3', '2', '1'];
+  var TSUNAMI_LEVELS = [
+    ['大津波警報', '#e838c8'], ['津波警報', '#e0231c'],
+    ['津波注意報', '#f5d020'], ['津波予報', '#4fc3f7']
+  ];
 
   Panels.drawLegend = function (style) {
     var c = el('legend-bar');
@@ -286,6 +294,22 @@
     var ul = el('legend-list');
     ul.innerHTML = '';
     ctx.clearRect(0, 0, c.width, c.height);
+
+    if (style === 'coast') {
+      // 津波の沿岸線だけを出すモード。帯は発表の段の色をそのまま並べる。
+      var band0 = c.height / TSUNAMI_LEVELS.length;
+      for (var t = 0; t < TSUNAMI_LEVELS.length; t++) {
+        ctx.fillStyle = TSUNAMI_LEVELS[t][1];
+        ctx.fillRect(0, t * band0, c.width, band0 + 0.5);
+      }
+      TSUNAMI_LEVELS.forEach(function (lv) {
+        var li = document.createElement('li');
+        li.textContent = lv[0];
+        ul.appendChild(li);
+      });
+      fitLabels(ul, TSUNAMI_LEVELS.length);
+      return;
+    }
 
     if (style === 'color') {
       // PGA は対数目盛なので、帯は連続、目盛だけ 10 の冪で刻む
@@ -334,9 +358,11 @@
   }
 
   Panels.setLegendStyle = function (style) {
-    el('style-number').classList.toggle('active', style !== 'color');
+    el('style-number').classList.toggle('active', style === 'number');
     el('style-color').classList.toggle('active', style === 'color');
-    el('legend-title').textContent = style === 'color' ? '地表最大加速度' : '地図の色';
+    el('style-coast').classList.toggle('active', style === 'coast');
+    el('legend-title').textContent =
+      style === 'color' ? '地表最大加速度' : (style === 'coast' ? '津波の沿岸線' : '地図の色');
     Panels.drawLegend(style);
   };
 

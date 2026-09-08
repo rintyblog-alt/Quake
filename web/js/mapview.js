@@ -213,9 +213,13 @@
     return Math.max(global.Util.pgaFromIntensity(values[i]), amb);
   };
 
-  /* 微動の揺らぎに使う時刻。再生を止めていても進める。 */
+  /* 微動の揺らぎに使う時刻。再生を止めていても進める。
+   *
+   * 強震モニタと同じで、色は 1 秒ごとにパッと切り替わる。秒の単位に丸めて
+   * おくことで、揺れの広がりも 1 秒ごとの段になって見える。 */
   MapView.prototype.tickNoise = function () {
-    this.noiseTime = (global.performance ? global.performance.now() : Date.now()) / 1000;
+    var now = (global.performance ? global.performance.now() : Date.now()) / 1000;
+    this.noiseTime = Math.floor(now);
   };
 
   MapView.prototype.drawStations = function (values) {
@@ -805,6 +809,36 @@
   };
 
   /* ---------------- 津波 ---------------- */
+  /* 津波の沿岸線だけを出すモード。
+   *
+   * 発表がまだのときは、予報区の縁を薄い灰色で置いておく。発表されたら
+   * そのまま段ごとの色に変わる。 */
+  MapView.prototype.drawCoastOnly = function (forecast, elapsed, issued) {
+    if (!this.tsunamiZones) return;
+    if (issued && forecast) return this.drawTsunami(forecast, elapsed);
+
+    var ctx = this.ctx, p = this.proj;
+    var span = Math.max(p.kmToPixels(2.6), 0.5);
+    var width = Math.max(5, span * 1.7);
+    ctx.save();
+    ctx.lineCap = 'round';
+    ctx.strokeStyle = 'rgba(190, 205, 225, 0.42)';
+    ctx.lineWidth = width;
+    var path = new Path2D();
+    for (var z = 0; z < this.tsunamiZones.length; z++) {
+      var coast = this.tsunamiZones[z].coast;
+      for (var k = 0; k < coast.length; k++) {
+        var pt = p.project(coast[k][0], coast[k][1]);
+        if (pt[0] < -60 || pt[0] > this.cssWidth + 60 ||
+            pt[1] < -60 || pt[1] > this.cssHeight + 60) continue;
+        path.moveTo(pt[0], pt[1]);
+        path.lineTo(pt[0] + 0.7, pt[1]);
+      }
+    }
+    ctx.stroke(path);
+    ctx.restore();
+  };
+
   MapView.prototype.drawTsunami = function (forecast, elapsed) {
     if (!forecast || !this.tsunamiZones) return;
     var ctx = this.ctx, p = this.proj;

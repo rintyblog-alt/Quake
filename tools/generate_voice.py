@@ -8,6 +8,12 @@ Scratch の「音声合成」拡張が使っている合成サーバ (MIT) を�
 読み上げ文は部品に分けて合成し、再生時につなげる。こうすることで、設定モードで
 指定した任意の震源についても、あらかじめ用意した音声だけで読み上げられる。
 
+  揺れの検知
+    千葉県南部で揺れを検出。
+
+  緊急地震速報
+    宮城県沖で地震。推定最大震度6強
+
   震度速報 (仮)
     震度速報。最大震度6強を。宮城県北部。で観測しました。
 
@@ -75,6 +81,12 @@ PHRASES = {
     "flash_lead": "震度速報。最大震度",
     "flash_wo": "を。",
     "flash_tail": "で観測しました。",
+
+    # 揺れの検知 : ○○○で揺れを検出。
+    "detect_tail": "で揺れを検出。",
+
+    # 緊急地震速報 : ○○○で地震。推定最大震度○
+    "eew_tail": "で地震。推定最大震度",
 
     # 地震情報 (確定)
     "info_lead": "地震情報。",
@@ -145,6 +157,15 @@ def depth_phrases() -> dict[str, str]:
     return {f"depth_{v}": str(v) for v in DEPTH_VALUES}
 
 
+def load_yomi() -> dict[str, str]:
+    """地名の読み (かな)。漢字のままだと合成音声が読み違える。"""
+    path = DATA / "yomi.json"
+    if not path.exists():
+        print("  [警告] web/data/yomi.json が無いので漢字のまま読み上げます")
+        return {}
+    return json.loads(path.read_text(encoding="utf-8"))["yomi"]
+
+
 def zone_phrases() -> dict[str, str]:
     """津波予報区 (「以上の地域で」の前に読み上げる沿岸の名前)。"""
     zones = json.loads((DATA / "tsunami_zones.json").read_text(encoding="utf-8"))["zones"]
@@ -161,6 +182,10 @@ def area_phrases() -> dict[str, str]:
     """震度観測地域名 (震度速報の「○○○で観測しました」の部分)。"""
     subs = json.loads((DATA / "subdivisions.json").read_text(encoding="utf-8"))
     return {f"area_{code}": name for code, name in zip(subs["codes"], subs["names"])}
+
+
+# 地名のクリップ。画面には漢字を出し、読み上げにはかなを渡す。
+PLACE_PREFIXES = ("region_", "area_", "zone_")
 
 
 def build_phrases(scope: str) -> dict[str, str]:
@@ -222,6 +247,21 @@ def main() -> int:
     if args.limit:
         items = items[: args.limit]
 
+    yomi = load_yomi()
+    # 地名は漢字ではなく、かなを合成に渡す
+    spoken = {}
+    unread = 0
+    for key, text in items:
+        if key.startswith(PLACE_PREFIXES):
+            kana = yomi.get(text)
+            if kana:
+                spoken[key] = kana
+                continue
+            unread += 1
+        spoken[key] = text
+    if unread:
+        print(f"  [警告] 読みが無い地名 {unread} 件は漢字のまま合成します")
+
     if args.dry_run:
         uniq = {t for _, t in items}
         try:
@@ -245,20 +285,22 @@ def main() -> int:
 
     made = skipped = failed = 0
     for n, (key, text) in enumerate(items, 1):
-        name = text_id(text) + ".mp3"
+        say = spoken[key]
+        name = text_id(say) + ".mp3"
         dest = out_dir / name
         if dest.exists():
-            clips[key] = {"text": text, "file": name, "bytes": dest.stat().st_size}
+            clips[key] = {"text": text, "say": say, "file": name,
+                          "bytes": dest.stat().st_size}
             skipped += 1
             continue
         try:
-            mp3 = synthesize(text, voice["gender"])
+            mp3 = synthesize(say, voice["gender"])
         except RuntimeError as e:
             print(f"  [失敗] {key}: {e}", flush=True)
             failed += 1
             continue
         dest.write_bytes(mp3)
-        clips[key] = {"text": text, "file": name, "bytes": len(mp3)}
+        clips[key] = {"text": text, "say": say, "file": name, "bytes": len(mp3)}
         made += 1
         if made % 25 == 0:
             write_index(index_path, args.voice, voice, clips)

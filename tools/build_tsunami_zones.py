@@ -26,9 +26,20 @@ OUT = ROOT / "web" / "data"
 
 
 def coastal_cells(mask: LandMask) -> tuple[np.ndarray, np.ndarray]:
-    """海に接する陸セルの緯度経度を返す。"""
+    """外洋に接する陸セルの緯度経度を返す。
+
+    「陸でない」だけでは湖・川・マスクの穴まで海になってしまい、内陸に
+    津波の沿岸線が引かれる。外周からたどり着ける海だけを海とみなす。
+    """
+    from scipy.ndimage import label
+
     m = mask.mask
     sea = ~m
+    lab, _ = label(sea)
+    edge = np.concatenate([lab[0], lab[-1], lab[:, 0], lab[:, -1]])
+    keep = [int(v) for v in np.unique(edge) if v]
+    sea = np.isin(lab, keep)
+    print(f"  外洋につながる海セル {int(sea.sum())} / 陸でないセル {int((~m).sum())}")
     neighbour_sea = np.zeros_like(m)
     for di, dj in ((1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1)):
         shifted = np.roll(np.roll(sea, di, axis=0), dj, axis=1)

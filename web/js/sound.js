@@ -417,7 +417,8 @@
    * 読み上げは必ず効果音が鳴り終わってから始める (noteEffect / _effectEndsAt)。
    */
 
-  var VOICE_GAP = 0.05;            // 部品と部品のあいだ [s]
+  var VOICE_GAP = 0.0;             // 部品と部品のあいだ [s]
+  var VOICE_XFADE = 0.045;         // 部品どうしを重ねて混ぜる長さ [s]
   var VOICE_PAUSE = 0.28;          // 原稿の句点 (PAUSE) のところで置く間 [s]
   var PAUSE = '。';                 // 部品の列に混ぜると、そこで一拍おく
   var VOICE_AFTER_EFFECT = 0.25;   // 効果音が終わってから読み始めるまで [s]
@@ -540,17 +541,26 @@
       var rate = self.voiceRate || 1;
       var at = self.voiceStartTime();
       self._voiceNodes = [];
+      // 部品の切れ目で音が途切れて「つぎはぎ」に聞こえないよう、
+      // 前後をわずかに重ねて混ぜる。
       buffers.forEach(function (buf, i) {
         if (buf === PAUSE) { at += VOICE_PAUSE; return; }
         var cut = self.voiceTrim[self.voiceClips[wanted[i]].file] ||
                   { offset: 0, duration: buf.duration };
+        var dur = cut.duration / rate;
+        var fade = Math.min(VOICE_XFADE, dur * 0.28);
         var src = self.ctx.createBufferSource();
+        var g = self.ctx.createGain();
         src.buffer = buf;
         src.playbackRate.value = rate;
-        src.connect(self.voiceOut);
+        g.gain.setValueAtTime(0.0001, at);
+        g.gain.linearRampToValueAtTime(1.0, at + fade);
+        g.gain.setValueAtTime(1.0, Math.max(at + fade, at + dur - fade));
+        g.gain.linearRampToValueAtTime(0.0001, at + dur);
+        src.connect(g); g.connect(self.voiceOut);
         src.start(at, cut.offset, cut.duration);
         self._voiceNodes.push(src);
-        at += cut.duration / rate + VOICE_GAP;
+        at += dur - fade + VOICE_GAP;
       });
     });
     return true;
@@ -607,6 +617,17 @@
   }
 
   /* ---------------- 場面ごとの読み上げ ---------------- */
+
+  /* 揺れの検知
+   *   千葉県南部で揺れを検出。
+   *
+   * 検知の音が鳴り終わってから読む。地域名は細分区域の名前をそのまま使う。 */
+  Sound.prototype.announceDetect = function (areaName) {
+    this.unlock();
+    var clip = this.regionClip(areaName);
+    if (clip && this.playSequence([clip, 'detect_tail'])) return;
+    this.speak(areaName + 'で揺れを検出。');
+  };
 
   /* 地震速報 (仮)
    *   地震速報。最大震度6強を。宮城県北部。で観測しました。 */
@@ -676,13 +697,15 @@
     if (global.speechSynthesis) global.speechSynthesis.cancel();
   };
 
-  /* 緊急地震速報と津波予報は原稿の部品を用意していないため内蔵の音声合成で読む */
+  /* 緊急地震速報
+   *   宮城県沖で地震。推定最大震度6強
+   *
+   * 第 1 報の音が鳴り終わってから、一度だけ読む。 */
   Sound.prototype.announceEEW = function (report) {
-    var head = report.kind === '警報' ? '緊急地震速報、警報。' : '緊急地震速報。';
-    var tail = report.kind === '警報'
-      ? '強い揺れに警戒してください。' : '揺れに注意してください。';
-    this.speak(head + report.region + 'で地震。予想される最大の震度は' +
-               report.maxShindo + '。' + tail);
+    this.unlock();
+    var seq = [this.regionClip(report.region), 'eew_tail', SHINDO_CLIP[report.maxShindo]];
+    if (this.playSequence(seq)) return;
+    this.speak(report.region + 'で地震。推定最大震度' + report.maxShindo);
   };
 
   /* 津波警報・大津波警報・津波注意報の読み上げ。

@@ -25,6 +25,18 @@ from .velocity import VelocityModel, travel_time
 # P 波検知のしきい値 [gal] (加速度の絶対値)
 TRIGGER_GAL = 2.0
 
+# 第 1 報を出すまでの条件
+#
+# 気象庁の規則は 2 点検知だが、実際には震央が海のときほど「1 点目の検知から
+# 揺れが広がって、震源とマグニチュードがある程度固まってから」第 1 報が出る。
+# 震央の真下に観測点がある直下型はこれまでどおり 2 点で出し、それ以外は
+# もう少し点数がそろうのを待つ。待つ点数と上乗せの遅れは報ごとに揺らがせる。
+DIRECT_HIT_KM = 35.0              # 震央から最寄り観測点までがこれ以内なら直下とみなす
+FIRST_MIN_STATIONS = 2            # 直下のときの検知点数
+FIRST_SPREAD_STATIONS = (4, 10)   # 直下でないときに待つ検知点数の範囲
+FIRST_EXTRA_DELAY_S = (0.8, 3.5)  # 直下でないときの上乗せの遅れ [s]
+FIRST_JITTER_S = (0.1, 0.7)       # 直下でも入れるわずかな揺らぎ [s]
+
 # EEW のマグニチュード推定式 M = log10(A[cm]) + B*log10(R[km]) + C
 # 係数は本シミュレータの合成波形 (Mw 6.0-8.0、震源距離 25-200 km) に対して
 # 較正した値。実際の EEW と同様、P 波到達直後は振幅が育っておらず M は
@@ -84,6 +96,7 @@ class EEWSimulator:
         model: VelocityModel | None = None,
         processing_delay: float = 1.0,
         report_interval: float = 2.0,
+        seafloor: np.ndarray | None = None,
     ) -> None:
         self.lat = np.asarray(station_lat, dtype=float)
         self.lon = np.asarray(station_lon, dtype=float)
@@ -92,6 +105,8 @@ class EEWSimulator:
         self.model = model or VelocityModel()
         self.processing_delay = processing_delay
         self.report_interval = report_interval
+        # 直下かどうかは陸の観測点で測る (海底観測点は震央の真上にも並ぶ)
+        self.land = None if seafloor is None else ~np.asarray(seafloor, dtype=bool)
 
     # -- 震源決定 ------------------------------------------------------
     def locate(
@@ -158,11 +173,15 @@ class EEWSimulator:
         disp_amplitude,
         true_kind: str = "crustal",
         max_reports: int = 20,
+        source: tuple[float, float] | None = None,
+        seed: int = 0,
     ) -> list[EEWReport]:
         """検知時刻列から EEW の発表シーケンスを生成する。
 
         trigger_times : 各観測点の P 波検知時刻 [s] (未検知は inf)
         disp_amplitude: f(station_index, elapsed) -> 変位振幅 [cm] を返す関数
+        source        : 震央 (緯度, 経度)。直下かどうかの判定に使う。
+        seed          : 第 1 報の待ち方を揺らがせる種
         """
         trig = np.asarray(trigger_times, dtype=float)
         order = np.argsort(trig)
@@ -173,8 +192,26 @@ class EEWSimulator:
 
         reports: list[EEWReport] = []
         stable_count = 0
-        # 第 1 報は 2 点目の検知 + 処理遅延
-        t_first = float(trig[order[1]]) + self.processing_delay
+
+        # 震央の真下に観測点があるか (直下型かどうか)
+        direct = True
+        if source is not None:
+            d0 = haversine_array(source[0], source[1], self.lat, self.lon)
+            if self.land is not None:
+                d0 = np.where(self.land, d0, np.inf)
+            direct = bool(np.nanmin(d0) <= DIRECT_HIT_KM)
+
+        rng = np.random.default_rng(seed)
+        if direct:
+            need = FIRST_MIN_STATIONS
+            extra = float(rng.uniform(*FIRST_JITTER_S))
+        else:
+            # 揺れが広がって点数がそろうまで待つ
+            need = int(rng.integers(FIRST_SPREAD_STATIONS[0], FIRST_SPREAD_STATIONS[1] + 1))
+            extra = float(rng.uniform(*FIRST_EXTRA_DELAY_S))
+        need = min(max(need, FIRST_MIN_STATIONS), int(order.size))
+
+        t_first = float(trig[order[need - 1]]) + self.processing_delay + extra
         seed = int(order[0])
 
         next_t = t_first

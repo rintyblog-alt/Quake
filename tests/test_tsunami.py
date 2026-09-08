@@ -51,11 +51,16 @@ def test_tohoku_like_event_triggers_major_warning(zones):
     f = zones.forecast(38.10, 143.10, 24.0, 9.0, 90.0, is_offshore=True)
     assert f is not None
     assert f.max_grade == "大津波警報"
-    names = [z.name for z in f.zones]
-    assert "宮城県" in names and "岩手県" in names
-    # 日本海側は陸に遮られるため対象外
-    assert "新潟県上中下越" not in names
-    assert "富山県" not in names
+    by = {z.name: z for z in f.zones}
+    assert "宮城県" in by and "岩手県" in by
+    # 2011 年の実績 (宮城 17m 前後、岩手 16m 前後) に近い高さが出る
+    assert 12.0 < by["宮城県"].height_m < 26.0
+    assert 10.0 < by["岩手県"].height_m < 24.0
+    # 太平洋側は遠くまで広く対象になる
+    for nm in ("北海道太平洋沿岸東部", "千葉県九十九里・外房", "静岡県", "高知県", "宮崎県"):
+        assert nm in by, nm
+    # 日本海側へは海峡を回り込んで届くので、対象にはなるが桁違いに低い
+    assert by["新潟県上中下越"].height_m < by["宮城県"].height_m / 8
 
 
 def test_arrival_times_increase_with_distance(zones):
@@ -68,13 +73,25 @@ def test_arrival_times_increase_with_distance(zones):
 def test_japan_sea_event_only_affects_japan_sea_side(zones):
     f = zones.forecast(37.90, 137.60, 12.0, 7.6, 90.0, is_offshore=True)
     assert f is not None
-    names = [z.name for z in f.zones]
-    assert "石川県能登" in names
-    assert "宮城県" not in names
+    by = {z.name: z for z in f.zones}
+    assert "石川県能登" in by
+    # 太平洋側へは本州を回り込むので、日本海側とは桁が違う
+    assert by["石川県能登"].height_m > 1.5
+    assert by.get("宮城県") is None or by["宮城県"].height_m < 0.3
 
 
-def test_blocked_path_detection(zones):
-    # 三陸沖から日本海側の沿岸へは陸に遮られる
-    assert zones.is_blocked(38.1, 143.1, 37.9, 139.0)
-    # 同じ太平洋側の沿岸へは遮られない
-    assert not zones.is_blocked(38.1, 143.1, 38.3, 141.1)
+def test_water_path_goes_around_land(zones):
+    """水路距離は陸を突っ切らず、回り込むぶん直線より長くなる。"""
+    import numpy as np
+
+    from sim.geo import haversine_array
+
+    g, dist = zones.water_distances(38.1, 143.1)
+    # 三陸沖 -> 太平洋側 (石巻あたり) はほぼ直線
+    near = zones._cell_of(g, 38.35, 141.45)
+    straight = haversine_array(38.1, 143.1, np.array([38.35]), np.array([141.45]))[0]
+    assert dist[near] < straight * 1.6
+    # 三陸沖 -> 日本海側 (新潟沖) は津軽海峡などを回り込むぶん、はるかに長い
+    far = zones._cell_of(g, 38.05, 138.95)
+    straight2 = haversine_array(38.1, 143.1, np.array([38.05]), np.array([138.95]))[0]
+    assert dist[far] > straight2 * 2.0

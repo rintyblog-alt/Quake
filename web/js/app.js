@@ -39,13 +39,18 @@
   };
 
   /* ================= 震央地名 ================= */
+  /* 国内の海域名の代表点からこれだけ離れていて、遠地の地名のほうが近ければそちらを使う [km] */
+  var WORLD_THRESHOLD_KM = 300.0;
+
   function Regions(regionsJson, stations, landmask) {
     this.list = regionsJson.regions;
     this.byCode = {};
     this.seaLat = []; this.seaLon = []; this.seaRef = [];
+    this.world = [];
     for (var i = 0; i < this.list.length; i++) {
       var r = this.list[i];
       this.byCode[r.code] = r;
+      if (r.type === 'world') this.world.push(r);
       if (r.type === 'sea') {
         var anchors = r.anchors || [[r.lat, r.lon]];
         for (var k = 0; k < anchors.length; k++) {
@@ -75,6 +80,16 @@
       if (ds < sD) { sD = ds; sBest = i; }
     }
     if (bestD < 3 && bestD < sD && this.byCode[landCode]) return this.byCode[landCode].name;
+
+    // 国内の区分から離れていれば、遠地地震の大まかな地名を使う
+    if (this.world.length && sD > WORLD_THRESHOLD_KM) {
+      var wBest = -1, wD = Infinity;
+      for (i = 0; i < this.world.length; i++) {
+        var dw = U.haversine(lat, lon, this.world[i].lat, this.world[i].lon);
+        if (dw < wD) { wD = dw; wBest = i; }
+      }
+      if (wBest >= 0 && wD < sD) return this.world[wBest].name;
+    }
     return sBest >= 0 ? this.seaRef[sBest].name : '';
   };
 
@@ -260,6 +275,8 @@
     this.firedReports = 0;
     this.firedTsunami = false;
     this.detectLevel = 0;
+    this.saidAreas = [];
+    this.saidPoints = [];
     this.infoStage = 0;
     this.followBoxes = true;
     this.boxSpan = 0;
@@ -277,8 +294,8 @@
     el('scenario-name').textContent = cur.title || '';
 
     P.hideEEW(); P.hideTsunami(); P.hideFinalInfo(); P.hideDetect();
-    el('coast-legend').classList.add('hidden');
-    el('legend').classList.remove('hidden');
+    this.firedTsunami = false;
+    this.updateLegends();
     el('wave-strip').classList.toggle('hidden', !this.panelOn.wave);
 
     this.pushHistory({
@@ -536,6 +553,8 @@
     // 巻き戻し・早送りで鳴り直さないよう、今の反応の段まで進めておく
     var levels = this.sound.detectLevels();
     var gal = U.pgaFromIntensity(this.peakIntensity());
+    this.saidAreas = [];
+    this.saidPoints = [];
     this.detectLevel = 0;
     while (this.detectLevel < levels.length && gal >= levels[this.detectLevel]) this.detectLevel++;
 
@@ -566,8 +585,7 @@
     this.firedTsunami = !!(cur.tsunami && this.t >= cur.tsunami.issuedAt);
     if (this.firedTsunami && this.panelOn.tsunami) P.showTsunami(cur.tsunami, cur.originDate);
     else P.hideTsunami();
-    el('coast-legend').classList.toggle('hidden', !this.firedTsunami);
-    el('legend').classList.toggle('hidden', this.firedTsunami);
+    this.updateLegends();
   };
 
   App.renderMarks = function () {
@@ -629,6 +647,37 @@
     return mx;
   };
 
+  /* 揺れを検出した地域の読み上げ。
+   *
+   * 最初に反応したところを一度だけ読み、そのあとは離れた地域 (別の地方) で
+   * 反応が出たときにまた読む。近くの区域が次々に反応するたびには読まない。 */
+  var DETECT_SAY_MIN = -0.5;        // 微弱の検知と同じくらいの反応から
+  var DETECT_SAY_FAR_KM = 250.0;    // これだけ離れていれば別の地域として読み直す
+
+  App.announceDetected = function (live) {
+    if (!this.view.subCentroids || !this.subNames) return;
+    var seen = this.saidAreas || (this.saidAreas = []);
+    var said = this.saidPoints || (this.saidPoints = []);
+    var best = -1, bv = DETECT_SAY_MIN;
+    for (var a = 0; a < live.length; a++) {
+      if (live[a] >= bv && seen.indexOf(a) < 0) { bv = live[a]; best = a; }
+    }
+    if (best < 0) return;
+    var c = this.view.subCentroids[best];
+    for (var i = 0; i < seen.length; i++) {
+      // 既に反応している区域の近くなら、揺れが広がってきただけなので読まない。
+      // 離れたところで同時に反応したときだけ読み直す。
+      var d = this.view.subCentroids[seen[i]];
+      if (U.haversine(c[0], c[1], d[0], d[1]) < DETECT_SAY_FAR_KM) {
+        seen.push(best);
+        return;
+      }
+    }
+    seen.push(best);
+    said.push(c);
+    this.sound.announceDetect(this.subNames[best]);
+  };
+
   App.processEvents = function () {
     var cur = this.current, eew = cur.eew || [];
 
@@ -640,9 +689,9 @@
         if (r.kind === '警報') this.sound.warning(); else this.sound.forecast();
         this.sound.announceEEW(r);
       } else {
+        // 続報は音だけ。読み上げは第 1 報の一度きり。
         var prev = eew[this.firedReports - 1];
         this.sound.update(prev ? isMajorUpdate(prev, r) : false);
-        if (prev && (prev.kind !== r.kind || prev.maxShindo !== r.maxShindo)) this.sound.announceEEW(r);
       }
       P.showEEW(r, cur.originDate);
       this.firedReports++;
@@ -672,8 +721,7 @@
     if (cur.tsunami && !this.firedTsunami && this.t >= cur.tsunami.issuedAt) {
       this.firedTsunami = true;
       if (this.panelOn.tsunami) P.showTsunami(cur.tsunami, cur.originDate);
-      el('coast-legend').classList.remove('hidden');
-      el('legend').classList.add('hidden');
+      this.updateLegends();
       this.sound.tsunami(cur.tsunami.maxLevel);
       this.sound.announceTsunami(cur.tsunami, cur.source);
     }
@@ -734,6 +782,15 @@
       depth: cur.source.depth, maxIntensity: cur.source.maxIntensity,
       time: cur.originDate, areas: this.topAreas(this.areaIntensity, 8)
     });
+  };
+
+  /* 凡例の出し分け。津波の沿岸線モードのときは、表示の切り替えが要るので
+   * こちらの凡例を出したままにする。 */
+  App.updateLegends = function () {
+    var coastMode = this.view && this.view.stationStyle === 'coast';
+    var showCoast = this.firedTsunami && !coastMode;
+    el('coast-legend').classList.toggle('hidden', !showCoast);
+    el('legend').classList.toggle('hidden', showCoast);
   };
 
   App.showFinal = function () {
@@ -803,9 +860,13 @@
 
     if (cur) {
       var k = U.clamp(Math.round(this.t / cur.dt), 0, cur.nt - 1);
-      var vals = cur.valuesAt(this.t);
+      // 観測点の色は強震モニタと同じで 1 秒ごとに切り替える
+      var vals = cur.valuesAt(Math.floor(this.t));
 
-      if (this.phase === 'final') {
+      if (v.stationStyle === 'coast') {
+        // 津波の沿岸線だけを出す
+        v.drawCoastOnly(cur.tsunami, this.t, this.firedTsunami);
+      } else if (this.phase === 'final') {
         v.drawObservedSubdivisions(this.areaIntensity);
         v.drawStationShindo(cur.final);
         v.drawSubdivisionTiles(this.areaIntensity);
@@ -836,10 +897,13 @@
       // 揺れを検出パネル (現在のリアルタイム震度)
       if (this.phase !== 'final') {
         var live = this.aggregateBySubdivision(vals);
+        this.announceDetected(live);
         var mx = -3;
         for (var q = 0; q < vals.length; q++) if (vals[q] > mx) mx = vals[q];
         P.showDetect(mx, this.topAreas(live, 6));
       }
+    } else if (v.stationStyle === 'coast') {
+      v.drawCoastOnly(null, 0, false);
     } else {
       v.drawStations(null);
     }
@@ -1095,14 +1159,16 @@
     function setStationStyle(style) {
       self.view.stationStyle = style;
       P.setLegendStyle(style);
+      self.updateLegends();
       try { localStorage.setItem('stationStyle', style); } catch (e) { /* 保存できなくても続行 */ }
       self.draw();  // 停止中に切り替えても反映されるように
     }
     el('style-number').addEventListener('click', function () { setStationStyle('number'); });
     el('style-color').addEventListener('click', function () { setStationStyle('color'); });
+    el('style-coast').addEventListener('click', function () { setStationStyle('coast'); });
     var saved = null;
     try { saved = localStorage.getItem('stationStyle'); } catch (e) { saved = null; }
-    setStationStyle(saved === 'color' ? 'color' : 'number');
+    setStationStyle(saved === 'color' || saved === 'coast' ? saved : 'number');
 
     el('zoom-in').addEventListener('click', function () {
       self._tween = null;

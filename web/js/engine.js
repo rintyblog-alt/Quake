@@ -317,6 +317,15 @@
   };
 
   /* ---------------- 緊急地震速報 ---------------- */
+  /* 震源から決まる、同じ値を返す簡単な乱数 */
+  function pseudoRandom(a, b, c) {
+    var x = Math.sin(a * 12.9898 + b * 78.233 + c * 37.719) * 43758.5453;
+    return function () {
+      x = Math.sin(x * 91.7 + 4.13) * 43758.5453;
+      return x - Math.floor(x);
+    };
+  }
+
   Engine.prototype.eewReports = function (field, src) {
     var st = this.stations;
     var n = field.tp.length;
@@ -326,8 +335,26 @@
     idx.sort(function (a, b) { return field.tp[a] - field.tp[b]; });
     if (idx.length < 2) return [];
 
+    // 第 1 報を出すまでの待ち方。
+    //
+    // 震央の真下に陸の観測点がある直下型は 2 点検知ですぐ出すが、それ以外は
+    // 揺れが広がって点数がそろうのを待つ。待つ点数と上乗せの遅れは震源ごとに
+    // 揺らがせる (同じ震源なら毎回同じになるように種から決める)。
+    var nearest = Infinity;
+    var sea = st.seafloor;
+    for (i = 0; i < n; i++) {
+      if (sea && sea[i]) continue;
+      var dd = global.Util.haversine(src.lat, src.lon, st.lat[i], st.lon[i]);
+      if (dd < nearest) nearest = dd;
+    }
+    var direct = nearest <= 35.0;
+    var rnd = pseudoRandom(src.lat, src.lon, src.depth);
+    var need = direct ? 2 : 4 + Math.floor(rnd() * 7);      // 4〜10 点
+    var extra = direct ? 0.1 + rnd() * 0.6 : 0.8 + rnd() * 2.7;
+    need = Math.min(Math.max(need, 2), idx.length);
+
     var reports = [];
-    var t = field.tp[idx[1]] + 1.0;
+    var t = field.tp[idx[need - 1]] + 1.0 + extra;
     var trueMax = -3;
     for (i = 0; i < n; i++) if (field.intensity[i] > trueMax) trueMax = field.intensity[i];
 

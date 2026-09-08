@@ -21,6 +21,7 @@ from .eew import TRIGGER_GAL, EEWSimulator
 from .geo import haversine_array
 from .gmpe import (
     arv_from_avs30,
+    long_range_correction,
     magnitude_distance_correction,
     slab_path_bonus,
     si_midorikawa_pga,
@@ -80,6 +81,9 @@ class StationSet:
         self.avs30 = np.array(s["avs30"], dtype=float)
         self.name = s["name"]
         self.region = np.array(s["region"], dtype=object)
+        # 海底地震計 (S-net・DONET 相当)。気象庁は海底で震度を発表しないので、
+        # 最大震度や地域の震度には数えない。
+        self.seafloor = np.array(s.get("seafloor") or [0] * len(self.lat), dtype=bool)
         self.count = len(self.lat)
 
 
@@ -156,6 +160,7 @@ class ScenarioResult:
     eew: list = field(default_factory=list)
     aftershocks: list = field(default_factory=list)
     tsunami: object | None = None
+    seafloor: object | None = None   # 海底観測点の印 (震度の集計から外す)
     elapsed_s: float = 0.0
 
 
@@ -213,8 +218,8 @@ def run(config: ScenarioConfig, data_dir: Path | None = None, verbose: bool = Tr
     resid = variability.intensity_residual(
         stations.lat, stations.lon, seed=config.seed + 977, median_intensity=median_est
     )
-    # 波形の振幅には、ばらつきと異常震域の両方を反映させる
-    gain = variability.acceleration_gain(resid + slab)
+    # 波形の振幅には、ばらつき・異常震域・遠方の補正をまとめて反映させる
+    gain = variability.acceleration_gain(resid + slab + long_range_correction(arr["r_min"]))
     # 余震には経路の項を引き直さず、観測点固有の項だけを使う
     site_resid = variability.PHI_SITE * variability.site_terms(stations.lat, stations.lon)
 
@@ -287,6 +292,16 @@ def run(config: ScenarioConfig, data_dir: Path | None = None, verbose: bool = Tr
         i_far = (np.asarray(intensity_from_pgv(pgv_far), dtype=float)
                  + magnitude_distance_correction(config.magnitude, r_far)
                  + slab[far] + resid[far])
+        # 打ち切り距離のところで値が飛ぶと、地図に不自然な円の縁ができる。
+        # 内側の帯 (波形合成) と外側の帯 (距離減衰式) の中央値を合わせておく。
+        inner = np.nonzero(epi_all[use] > config.max_distance_km - 120.0)[0]
+        outer = np.nonzero(epi_all[far] < config.max_distance_km + 120.0)[0]
+        if inner.size >= 20 and outer.size >= 20:
+            step = float(np.median(final[use][inner]) - np.median(i_far[outer]))
+            if abs(step) < 3.0:
+                i_far = i_far + step
+                if verbose:
+                    print(f"  打ち切り距離のつなぎ目を {step:+.2f} ずらしました", flush=True)
         final[far] = i_far
         pgv[far] = pgv_far * variability.pgv_gain(resid[far] + slab[far])
         pga[far] = pga_far * gain[far]
@@ -299,14 +314,16 @@ def run(config: ScenarioConfig, data_dir: Path | None = None, verbose: bool = Tr
     if verbose:
         print("  緊急地震速報を推定中...", flush=True)
     eew_sim = EEWSimulator(
-        stations.lat, stations.lon, stations.avs30, regions, model=model
+        stations.lat, stations.lon, stations.avs30, regions, model=model,
+        seafloor=stations.seafloor,
     )
 
     def amp_at(station: int, elapsed: float) -> float:
         j = int(np.clip(round(elapsed / 0.5), 0, n_amp - 1))
         return float(amp_curve[station, j])
 
-    reports = eew_sim.run(trigger, amp_at, true_kind=config.kind)
+    reports = eew_sim.run(trigger, amp_at, true_kind=config.kind,
+                          source=(config.lat, config.lon), seed=config.seed + 4231)
 
     # -- 余震 --
     shocks = []
@@ -351,10 +368,11 @@ def run(config: ScenarioConfig, data_dir: Path | None = None, verbose: bool = Tr
         eew=reports,
         aftershocks=shocks,
         tsunami=tsu,
+        seafloor=stations.seafloor,
         elapsed_s=time.time() - t_start,
     )
     if verbose:
-        top = int(np.argmax(final))
+        top = int(np.argmax(np.where(stations.seafloor, -99.0, final)))
         print(f"  最大震度 {shindo_class(final[top])} ({final[top]:.1f}) "
               f"{stations.name[top]} / 計算 {result.elapsed_s:.0f} s")
     return result
