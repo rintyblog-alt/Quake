@@ -939,21 +939,17 @@
     }, 30);
   };
 
-  App.runDefault = function () {
-    var res = this.engine.simulate(DEFAULT_SOURCE, {
-      duration: 260, aftershocks: true, tsunami: true, eew: true,
-      aftershockDays: 3, seed: 20260101
-    });
-    this.adoptEngineResult(res, res.source.region + ' ' + U.formatMagnitude(DEFAULT_SOURCE.magnitude), new Date());
-    this.play(true);
-    el('cfg-lat').value = DEFAULT_SOURCE.lat.toFixed(2);
-    el('cfg-lon').value = DEFAULT_SOURCE.lon.toFixed(2);
-    el('cfg-depth').value = String(DEFAULT_SOURCE.depth);
-    el('cfg-mag').value = DEFAULT_SOURCE.magnitude.toFixed(1);
-    el('cfg-kind').value = DEFAULT_SOURCE.kind;
-    el('cfg-strike').value = String(DEFAULT_SOURCE.strike);
-    el('cfg-dip').value = String(DEFAULT_SOURCE.dip);
-    el('cfg-rake').value = String(DEFAULT_SOURCE.rake);
+  /* 設定モードの入力欄に震源を書き込む */
+  App.fillConfigForm = function (src) {
+    el('cfg-lat').value = src.lat.toFixed(2);
+    el('cfg-lon').value = src.lon.toFixed(2);
+    el('cfg-depth').value = String(src.depth);
+    el('cfg-mag').value = src.magnitude.toFixed(1);
+    el('cfg-kind').value = src.kind;
+    el('cfg-strike').value = String(src.strike);
+    el('cfg-dip').value = String(src.dip);
+    el('cfg-rake').value = String(src.rake);
+    this.updateConfigPreview();
   };
 
   App.loadScenario = function (entry) {
@@ -1190,8 +1186,9 @@
       self.setDrill(true);
       self.view.proj.fitBounds(30.0, 128.0, 45.5, 146.0);
       self.setMode('visual');
-      if (self.scenarioIndex.length) self.loadScenario(self.scenarioIndex[0]);
-      else self.runDefault();
+      // 起動しただけでは地震を起こさない。観測点を見せて待つ。
+      self.fillConfigForm(DEFAULT_SOURCE);
+      P.toast('設定モードで震源を決めるか、保存済みシナリオを選んでください', 5200);
       self.lastFrame = performance.now();
       requestAnimationFrame(function (ts) { self.tick(ts); });
     }).catch(function (e) {

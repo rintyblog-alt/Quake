@@ -14,6 +14,10 @@
 TopoJSON の弧は隣り合う市区町村で共有されているため、弧の段階で間引けば
 融合したあとも境界がずれない (ポリゴンごとに間引くと隙間ができる)。
 
+電文コード表に載っていない市区町村 (市町村合併や区の再編でコードが変わった直後
+など) は、代表点にいちばん近い震度観測点が属する区域に入れる。地図のほうは
+対応表と関わりなく全市区町村から作るので、コード表の年次がずれても欠けない。
+
 同じ市区町村界を都道府県ごとに融合して web/data/japan.geojson も書き出す。
 地図の陸と震度の塗りつぶしを別々の出典から作ると海岸線がわずかにずれ、
 塗りの縁に地の色がはみ出して見えるため、両方を同じ形から作る。
@@ -32,9 +36,11 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
+import numpy as np
 import openpyxl
 from shapely.geometry import MultiPolygon, Polygon
 from shapely.geometry import LineString
+from scipy.spatial import cKDTree
 from shapely.ops import unary_union
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -216,21 +222,29 @@ def main() -> int:
     mapping = city_to_area()
     print(f"細分区域 {len(codes)} 件 / 市区町村の対応 {len(mapping)} 件")
 
+    # 対応表に無い市区町村を拾うための最近傍検索 (震度観測点 -> 細分区域)
+    st_lat = np.array(stations["lat"], dtype=float)
+    st_lon = np.array(stations["lon"], dtype=float)
+    st_area = list(stations["subarea"])
+    keep = [i for i, c in enumerate(st_area) if c in index_of]
+    scale = float(np.cos(np.radians(np.median(st_lat))))
+    tree = cKDTree(np.column_stack([st_lat[keep], st_lon[keep] * scale]))
+    keep_area = [st_area[i] for i in keep]
+
+    def nearest_area(poly) -> str:
+        pt = poly.representative_point()
+        _, j = tree.query([pt.y, pt.x * scale], k=1)
+        return keep_area[int(j)]
+
     by_area: dict[str, list] = {}
     by_pref: dict[int, list] = {}
-    missing: set[str] = set()
+    guessed: list[str] = []
     n_city = 0
     for pref in range(1, 48):
         topo = fetch_cities(pref)
         arcs = decode_arcs(topo, args.simplify)
         for geom in topo["objects"]["city"]["geometries"]:
             PREF_NAME.setdefault(pref, geom["properties"].get("N03_001") or "")
-            jis = str(geom["properties"].get("N03_007") or "")
-            area = mapping.get(jis)
-            if area is None or area not in index_of:
-                if jis:
-                    missing.add(jis)
-                continue
             poly = to_polygon(arcs, geom)
             if poly is None or poly.is_empty:
                 continue
@@ -238,12 +252,22 @@ def main() -> int:
                 poly = poly.buffer(0)
                 if poly.is_empty:
                     continue
-            by_area.setdefault(area, []).append(poly)
+            # 地図は対応表と関わりなく作る (コード表の年次がずれても欠けない)
             by_pref.setdefault(pref, []).append(poly)
             n_city += 1
+
+            jis = str(geom["properties"].get("N03_007") or "")
+            area = mapping.get(jis)
+            if area not in index_of:
+                area = nearest_area(poly)
+                guessed.append(f"{geom['properties'].get('N03_001')}{geom['properties'].get('N03_004')}"
+                               f" -> {names[area]}")
+            by_area.setdefault(area, []).append(poly)
         print(f"  {pref:02d}: 市区町村 {len(topo['objects']['city']['geometries'])} 件", flush=True)
 
-    print(f"取り込んだ市区町村 {n_city} 件 / 区域が定まらなかったもの {len(missing)} 件")
+    print(f"取り込んだ市区町村 {n_city} 件 / 最近傍で補ったもの {len(guessed)} 件")
+    for g in guessed:
+        print(f"    {g}")
 
     polygons: dict[str, list] = {}
     centroids: list[list[float]] = []
