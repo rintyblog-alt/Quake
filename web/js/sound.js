@@ -26,6 +26,15 @@
     this.channels = {};       // 系統名 -> 今鳴っている音 (重ねずに差し替える)
     this.manifest = null;
     this.slotsReady = false;
+    this.bundled = null;
+    this.voiceClips = null;   // クリップ名 -> {text, file}
+    this.voiceByText = null;  // 読み上げ文 -> クリップ名
+    this.voiceBuffers = {};   // ファイル名 -> AudioBuffer
+    this.voiceTrim = {};      // ファイル名 -> 前後の無音を除いた範囲
+    this.voicePending = {};   // ファイル名 -> 読み込み中の Promise
+    this.voiceRate = 1;       // 再生速度 (ネズミ = 1.19)
+    this.voiceOut = null;
+    this._effectEndsAt = 0;   // 効果音が鳴り終わる時刻 [ctx時間]
   }
 
   /* 差し替え音源のスロット定義 */
@@ -141,6 +150,7 @@
     src.buffer = buf;
     src.connect(g); g.connect(this.master);
     src.start();
+    this.noteEffect(buf.duration);
     if (channel) {
       this.channels[channel] = {
         src: src, gain: g,
@@ -276,6 +286,7 @@
   Sound.prototype.forecast = function () {
     this.unlock();
     if (this.playSlot('eew_forecast', 1.0, 'eew', 1.4)) return;
+    this.noteEffect(2.75);
     var seq = [587.33, 783.99, 698.46, 880.00];   // レ ソ ファ ラ
     for (var rep = 0; rep < 2; rep++) {
       for (var i = 0; i < seq.length; i++) {
@@ -290,6 +301,7 @@
     if (this.playSlot('eew_warning', 1.0, 'eew', 1.4)) return;
     // 警報用の音源が無ければ予報用で代える (合成音より近い)
     if (this.playSlot('eew_forecast', 1.0, 'eew', 1.4)) return;
+    this.noteEffect(2.3);
     for (var i = 0; i < 4; i++) {
       var base = i * 0.56;
       this.chime(932.33, base, 0.34, 0.85, [[1, 1], [2, 0.5], [3, 0.3], [5.4, 0.12]]);
@@ -303,6 +315,7 @@
     var slot = level >= 3 ? 'tsunami_major' : (level >= 2 ? 'tsunami_warning' : 'tsunami_advisory');
     if (this.playSlot(slot, 1.0, 'tsunami', 1.5)) return;
     var reps = level >= 3 ? 5 : 3;
+    this.noteEffect(reps * 1.0);
     for (var i = 0; i < reps; i++) {
       var base = i * 1.0;
       this.sweep(level >= 3 ? 300 : 360, level >= 3 ? 520 : 560, base, 0.72, 0.5);
@@ -351,74 +364,155 @@
     var slot = INFO_SLOTS[(stage || 3) - 1];
     if (slot && this.playSlot(slot, 1.0, 'info', 1.2)) return;
     if (this.playSlot('quake_info', 1.0, 'info', 1.2)) return;
+    this.noteEffect(0.85);
     this.chime(659.25, 0, 0.45, 0.5);
     this.chime(987.77, 0.18, 0.55, 0.45);
   };
 
   /* ---------------- 音声案内 ----------------
    *
-   * tools/generate_voice.py で作った読み上げ音声が web/sounds/voice/ にあれば、
-   * 「地震情報です」「宮城県沖」「最大震度は」「5弱」… と部品をつないで再生する。
-   * 無い場合はブラウザ内蔵の音声合成にそのまま戻る。
+   * tools/generate_voice.py が Scratch の音声合成で作った読み上げ音声を
+   * web/sounds/voice/ から読み、「地震情報。」「午後」「3時」「47分」…と
+   * 部品をつないで鳴らす。声は Scratch の「ネズミ」= アルト (ja-JP/female) を
+   * 1.19 倍の速さで再生したもので、その倍率はここで掛ける。
+   *
+   * 読み上げは必ず効果音が鳴り終わってから始める (noteEffect / _effectEndsAt)。
    */
+
+  var VOICE_GAP = 0.05;            // 部品と部品のあいだ [s]
+  var VOICE_PAUSE = 0.28;          // 原稿の句点 (PAUSE) のところで置く間 [s]
+  var PAUSE = '。';                 // 部品の列に混ぜると、そこで一拍おく
+  var VOICE_AFTER_EFFECT = 0.25;   // 効果音が終わってから読み始めるまで [s]
+  var VOICE_GAIN = 0.9;
+  var TRIM_THRESHOLD = 0.015;      // 無音とみなす振幅 (最大振幅に対する比)
+  var TRIM_MARGIN = 0.02;          // 切り詰めたあとに残す余白 [s]
+
+  /* 効果音の鳴り終わりを控えておく (読み上げはこの後から始める) */
+  Sound.prototype.noteEffect = function (seconds) {
+    if (!this.ctx) return;
+    var end = this.ctx.currentTime + seconds;
+    if (end > this._effectEndsAt) this._effectEndsAt = end;
+  };
+
+  Sound.prototype.voiceStartTime = function () {
+    return Math.max(this.ctx.currentTime + 0.05, this._effectEndsAt + VOICE_AFTER_EFFECT);
+  };
+
   Sound.prototype.loadVoice = function () {
     var self = this;
     if (this.voiceIndexLoaded) return Promise.resolve();
     this.voiceIndexLoaded = true;
     if (!this.ctx) this.unlock();
 
-    return fetch('sounds/voice/index.json', { cache: 'no-cache' })
-      .then(function (r) { return r.ok ? r.json() : null; })
-      .catch(function () { return null; })
-      .then(function (payload) {
-        if (!payload || !payload.clips) return;
-        self.voiceClips = payload.clips;
-        self.voiceByText = {};
-        Object.keys(payload.clips).forEach(function (key) {
-          self.voiceByText[payload.clips[key].text] = key;
-        });
-        self.voiceBuffers = {};
-        console.info('[voice] 読み上げ音声 ' + Object.keys(payload.clips).length + ' 件を検出');
+    var bundled = global.__BUNDLED_DATA;
+    this.bundled = bundled || null;
+    var load = bundled
+      ? Promise.resolve(bundled['sounds/voice/index.json'] || null)
+      : fetch('sounds/voice/index.json', { cache: 'no-cache' })
+          .then(function (r) { return r.ok ? r.json() : null; })
+          .catch(function () { return null; });
+
+    return load.then(function (payload) {
+      if (!payload || !payload.clips) return;
+      self.voiceClips = payload.clips;
+      self.voiceRate = payload.rate || 1;
+      self.voiceByText = {};
+      Object.keys(payload.clips).forEach(function (key) {
+        self.voiceByText[payload.clips[key].text] = key;
       });
+      console.info('[voice] 読み上げ音声 ' + Object.keys(payload.clips).length +
+                   ' 語 (' + (payload.voice || '?') + ' ×' + self.voiceRate + ')');
+    });
   };
 
-  /* 1 つのクリップを読み込む (一度読んだものは保持する) */
+  /* 1 つのクリップを読む。同じ読み上げ文は 1 ファイルを共有する。 */
   Sound.prototype.loadClip = function (key) {
     var self = this;
-    if (!this.voiceClips || !this.voiceClips[key]) return Promise.resolve(null);
-    if (this.voiceBuffers[key]) return Promise.resolve(this.voiceBuffers[key]);
-    return fetch('sounds/voice/' + this.voiceClips[key].file, { cache: 'force-cache' })
-      .then(function (r) { return r.ok ? r.arrayBuffer() : Promise.reject(); })
+    var clip = this.voiceClips && this.voiceClips[key];
+    if (!clip) return Promise.resolve(null);
+    var file = clip.file;
+    if (this.voiceBuffers[file]) return Promise.resolve(this.voiceBuffers[file]);
+    if (this.voicePending[file]) return this.voicePending[file];
+
+    var rel = 'sounds/voice/' + file;
+    var src = this.bundled ? (this.bundled[rel] || rel) : rel;
+    var direct = src.slice(0, 5) === 'data:' ? dataUriToBuffer(src) : null;
+    var p = (direct ? Promise.resolve(direct)
+                    : fetch(src, { cache: 'force-cache' })
+                        .then(function (r) { return r.ok ? r.arrayBuffer() : Promise.reject(); }))
       .then(function (buf) {
         return new Promise(function (resolve, reject) {
           self.ctx.decodeAudioData(buf, resolve, reject);
         });
       })
-      .then(function (audio) { self.voiceBuffers[key] = audio; return audio; })
+      .then(function (audio) {
+        self.voiceBuffers[file] = audio;
+        self.voiceTrim[file] = trimRange(audio);
+        return audio;
+      })
       .catch(function () { return null; });
+    this.voicePending[file] = p;
+    return p;
   };
 
-  /* クリップの列を順につないで再生する */
+  /* 前後の無音を落とした範囲を求める.
+   *
+   * 合成サーバが返す音は前後に無音が付いていて、そのままつなぐと部品ごとに
+   * 間が空いて途切れ途切れに聞こえる。鳴らす範囲だけを切り出して詰める。 */
+  function trimRange(buf) {
+    var d = buf.getChannelData(0), n = d.length, peak = 0, i;
+    for (i = 0; i < n; i++) { var a = d[i] < 0 ? -d[i] : d[i]; if (a > peak) peak = a; }
+    var th = peak * TRIM_THRESHOLD;
+    if (!(th > 0)) return { offset: 0, duration: buf.duration };
+    var first = 0, last = n - 1;
+    while (first < n && Math.abs(d[first]) < th) first++;
+    while (last > first && Math.abs(d[last]) < th) last--;
+    var margin = Math.round(TRIM_MARGIN * buf.sampleRate);
+    first = Math.max(0, first - margin);
+    last = Math.min(n - 1, last + margin);
+    return { offset: first / buf.sampleRate, duration: (last - first + 1) / buf.sampleRate };
+  }
+
+  /* クリップの列を順につないで再生する (欠けている部品があれば使わない) */
   Sound.prototype.playSequence = function (keys) {
-    if (!this.ctx || !this.enabled || !this.voiceClips) return false;
+    if (!this.ctx || !this.enabled || !this.speechEnabled || !this.voiceClips) return false;
     var self = this;
-    var wanted = keys.filter(function (k) { return k && self.voiceClips[k]; });
-    if (wanted.length < keys.filter(Boolean).length) return false;   // 欠けていたら使わない
+    var wanted = keys.filter(Boolean);
+    for (var i = 0; i < wanted.length; i++) {
+      if (wanted[i] === PAUSE) continue;
+      if (!this.voiceClips[wanted[i]]) {
+        console.warn('[voice] 部品が足りません: ' + wanted[i]);
+        return false;
+      }
+    }
 
     this.stopVoice();
+    if (!this.voiceOut) {
+      // 読み上げは残響を通さずに出す (言葉がにじまないように)
+      this.voiceOut = this.ctx.createGain();
+      this.voiceOut.gain.value = VOICE_GAIN;
+      this.voiceOut.connect(this.ctx.destination);
+    }
     var token = (this._voiceToken = (this._voiceToken || 0) + 1);
-    Promise.all(wanted.map(function (k) { return self.loadClip(k); })).then(function (buffers) {
+    Promise.all(wanted.map(function (k) {
+      return k === PAUSE ? Promise.resolve(PAUSE) : self.loadClip(k);
+    })).then(function (buffers) {
       if (token !== self._voiceToken) return;
       if (buffers.some(function (b) { return !b; })) return;
-      var at = self.ctx.currentTime + 0.05;
+      var rate = self.voiceRate || 1;
+      var at = self.voiceStartTime();
       self._voiceNodes = [];
-      buffers.forEach(function (buf) {
+      buffers.forEach(function (buf, i) {
+        if (buf === PAUSE) { at += VOICE_PAUSE; return; }
+        var cut = self.voiceTrim[self.voiceClips[wanted[i]].file] ||
+                  { offset: 0, duration: buf.duration };
         var src = self.ctx.createBufferSource();
         src.buffer = buf;
-        src.connect(self.master);
-        src.start(at);
+        src.playbackRate.value = rate;
+        src.connect(self.voiceOut);
+        src.start(at, cut.offset, cut.duration);
         self._voiceNodes.push(src);
-        at += buf.duration;
+        at += cut.duration / rate + VOICE_GAP;
       });
     });
     return true;
@@ -435,13 +529,16 @@
   /* 震度階級 -> クリップ名 */
   var SHINDO_CLIP = {
     '0': 'shindo_0', '1': 'shindo_1', '2': 'shindo_2', '3': 'shindo_3', '4': 'shindo_4',
-    '5弱': 'shindo_5m', '5強': 'shindo_5p', '6弱': 'shindo_6m', '6強': 'shindo_6p', '7': 'shindo_7'
+    '5弱': 'shindo_5m', '5強': 'shindo_5p', '6弱': 'shindo_6m', '6強': 'shindo_6p',
+    '7': 'shindo_7'
   };
-  var HEIGHT_CLIP = {
-    '10m超': 'height_10p', '10m': 'height_10', '5m': 'height_5', '3m': 'height_3',
-    '1m': 'height_1', '0.2m': 'height_02', '0.2m未満': 'height_slight'
-  };
-  var DEPTHS = [0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 120, 150, 200, 250, 300, 350, 400, 500, 600, 700];
+  var DEPTHS = [0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 120, 150, 200, 250,
+                300, 350, 400, 450, 500, 550, 600, 650, 700];
+
+  /* 用意してあるのは M3.0〜9.5。外れた値は端に寄せる。 */
+  function magClip(m) {
+    return Math.min(95, Math.max(30, Math.round(Number(m) * 10)));
+  }
 
   function nearestDepth(km) {
     var best = DEPTHS[0];
@@ -451,8 +548,55 @@
     return best;
   }
 
+  /* 地名 (震央地名・震度観測地域名) は読み上げ文そのもので引く */
   Sound.prototype.regionClip = function (name) {
     return this.voiceByText ? this.voiceByText[name] : null;
+  };
+
+  /* 午前/午後と 12 時制の時刻をクリップ名に直す */
+  function clockClips(date) {
+    var h = date.getHours();
+    // 0 時は「午前0時」、12 時は「午後0時」と読む
+    return [h < 12 ? 'ampm_am' : 'ampm_pm', 'hour_' + (h % 12), 'min_' + date.getMinutes()];
+  }
+
+  /* ---------------- 場面ごとの読み上げ ---------------- */
+
+  /* 地震速報 (仮)
+   *   地震速報。最大震度6強を。宮城県北部。で観測しました。 */
+  Sound.prototype.announceFlash = function (info) {
+    this.unlock();
+    var seq = ['flash_lead', SHINDO_CLIP[info.shindo], 'flash_wo',
+               this.regionClip(info.area), PAUSE, 'flash_tail'];
+    if (this.playSequence(seq)) return;
+    this.speak('地震速報。最大震度' + info.shindo + 'を、' + info.area + 'で観測しました。');
+  };
+
+  /* 地震情報 (確定)
+   *   地震情報。午後3時47分頃、最大震度6強を観測する地震がありました。
+   *   この地震による津波の心配はありません。／現在、津波予報等を発表中です。
+   *   震源地は、宮城県沖。深さ60キロメートル。
+   *   地震の規模を示すマグニチュードは、7.3と、推定されています。 */
+  Sound.prototype.announceQuake = function (info) {
+    this.unlock();
+    var when = clockClips(info.time || new Date());
+    var seq = ['info_lead', when[0], when[1], when[2], 'info_koro',
+               SHINDO_CLIP[info.shindo], 'info_observed',
+               info.tsunami ? 'info_tsunami_now' : 'info_no_tsunami',
+               'info_hypo_lead', this.regionClip(info.region), PAUSE,
+               'info_depth_lead', 'depth_' + nearestDepth(Number(info.depth)), 'info_km',
+               'mag_' + magClip(info.magnitude), 'info_mag_tail'];
+    if (this.playSequence(seq)) return;
+
+    var d = info.time || new Date();
+    this.speak('地震情報。' + (d.getHours() < 12 ? '午前' : '午後') +
+               (d.getHours() % 12 || 12) + '時' + d.getMinutes() + '分頃、最大震度' +
+               info.shindo + 'を観測する地震がありました。' +
+               (info.tsunami ? '現在、津波予報等を発表中です。'
+                             : 'この地震による津波の心配はありません。') +
+               '震源地は、' + info.region + '。深さ' + Math.round(info.depth) +
+               'キロメートル。地震の規模を示すマグニチュードは、' +
+               Number(info.magnitude).toFixed(1) + 'と、推定されています。');
   };
 
   /* ---------------- ブラウザ内蔵の音声合成 (代替) ---------------- */
@@ -486,9 +630,7 @@
     if (global.speechSynthesis) global.speechSynthesis.cancel();
   };
 
-  /* ---------------- 場面ごとの読み上げ ---------------- */
-
-  /* 緊急地震速報 (合成音声の部品は用意していないため内蔵の音声合成で読む) */
+  /* 緊急地震速報と津波予報は原稿の部品を用意していないため内蔵の音声合成で読む */
   Sound.prototype.announceEEW = function (report) {
     var head = report.kind === '警報' ? '緊急地震速報、警報。' : '緊急地震速報。';
     var tail = report.kind === '警報'
@@ -497,44 +639,8 @@
                report.maxShindo + '。' + tail);
   };
 
-  /* 地震情報 */
-  Sound.prototype.announceQuake = function (info) {
-    var region = this.regionClip(info.region);
-    var shindo = SHINDO_CLIP[info.shindo];
-    var mag = 'mag_' + Math.round(Number(info.magnitude) * 10);
-    var depth = 'depth_' + nearestDepth(Number(info.depth));
-
-    var seq = ['info_lead', region, 'info_quake', 'info_maxshindo', shindo, 'info_desu',
-               'info_depth_lead', depth, 'info_km',
-               'info_mag_lead', mag, 'info_mag_tail'];
-    if (info.noTsunami) seq.push('info_no_tsunami');
-    if (this.playSequence(seq)) return;
-
-    this.speak('地震情報。' + info.region + 'で、最大震度' + info.shindo +
-               'の地震がありました。地震の規模はマグニチュード' +
-               Number(info.magnitude).toFixed(1) + '、深さ約' +
-               Math.round(info.depth) + 'キロメートルです。' +
-               (info.noTsunami ? 'この地震による津波の心配はありません。' : ''));
-  };
-
-  /* 津波予報 */
   Sound.prototype.announceTsunami = function (forecast) {
-    var lead = ['tsunami_forecast', 'tsunami_advisory', 'tsunami_warning', 'tsunami_major'][forecast.maxLevel];
-    var evac = ['tsunami_evacuate_forecast', 'tsunami_evacuate_advisory',
-                'tsunami_evacuate_warning', 'tsunami_evacuate_major'][forecast.maxLevel];
-    var top = forecast.zones.slice(0, 3);
-    var seq = [lead];
-    for (var i = 0; i < top.length; i++) {
-      seq.push(this.regionClip(top[i].name));
-      if (i < top.length - 1) seq.push('conj_and');
-    }
-    seq.push('tsunami_expect');
-    seq.push(HEIGHT_CLIP[top[0].heightClass]);
-    seq.push('tsunami_expect_tail');
-    seq.push(evac);
-    if (this.playSequence(seq)) return;
-
-    var names = top.map(function (z) { return z.name; }).join('、');
+    var names = forecast.zones.slice(0, 3).map(function (z) { return z.name; }).join('、');
     var text = {
       3: '大津波警報。ただちに高台や避難ビルへ避難してください。',
       2: '津波警報。ただちに海岸から離れ、高台へ避難してください。',

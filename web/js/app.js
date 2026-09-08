@@ -661,6 +661,7 @@
       this.infoStage++;
       this.showInfo(this.infoStage);
       this.sound.info(this.infoStage);
+      this.announceInfo(this.infoStage);
     }
 
     if (cur.tsunami && !this.firedTsunami && this.t >= cur.tsunami.issuedAt) {
@@ -679,12 +680,10 @@
     this.phase = 'final';
     var wasFinal = this.infoStage >= 3;
     this.showFinal();
-    if (!wasFinal) this.sound.info(3);
-    this.sound.announceQuake({
-      region: cur.source.region, shindo: cur.source.maxShindo,
-      magnitude: cur.source.magnitude, depth: cur.source.depth,
-      noTsunami: !cur.tsunami
-    });
+    if (!wasFinal) {
+      this.sound.info(3);
+      this.announceInfo(3);
+    }
     // 余震は、この再生が終わってから次に進める (重ならないように)
     this.collectAftershocks();
     if (this.aftershockQueue) {
@@ -696,6 +695,29 @@
   /* 地震情報の発表時刻 [s]。気象庁の順序に合わせ、
    * 震度速報 -> 震源に関する情報 -> 震源・震度に関する情報 と出す。 */
   var INFO_TIMES = [90, 170, 260];
+
+  /* 段階に応じた地震情報を読み上げる。
+   *   1 震度速報       地震速報。最大震度○を。○○○。で観測しました。
+   *   2 震源に関する情報 / 3 確定
+   *     地震情報。午後○時○分頃、最大震度○を観測する地震がありました。… */
+  App.announceInfo = function (stage) {
+    var cur = this.current;
+    if (!cur) return;
+    if (stage <= 1) {
+      var top = this.topAreas(this.areaIntensity, 1)[0];
+      if (!top) return;
+      this.sound.announceFlash({ shindo: U.shindoClass(top.intensity), area: top.name });
+      return;
+    }
+    this.sound.announceQuake({
+      time: cur.originDate,
+      shindo: U.shindoClass(cur.source.maxIntensity),
+      region: cur.source.region,
+      depth: cur.source.depth,
+      magnitude: cur.source.magnitude,
+      tsunami: !!cur.tsunami
+    });
+  };
 
   /* 段階に応じた地震情報を出す (3 = 確定) */
   App.showInfo = function (stage) {

@@ -395,17 +395,31 @@ python tools/build_bundle.py --sounds --timeline-stride 2 --scenarios tohoku_off
 0.2 / 0.5 / 2 / 5 / 20 / 150 / 500 gal を越えるたびに一度ずつ鳴り、PGA の配色と
 対応している。
 
-地震情報と津波予報の読み上げは、`web/sounds/voice/` に置いた短いクリップを
-つなげて再生する。クリップは Gemini の TTS で生成する。
+### 地震情報の読み上げ
+
+地震情報は、効果音が鳴り終わってから合成音声で読み上げる。声は Scratch の
+音声合成の「ネズミ」（アルト ja-JP を 1.19 倍の速さで再生したもの）で、
+`web/sounds/voice/` に置いた短いクリップをつないで喋らせる。
 
 ```bash
-export GEMINI_API_KEY=...
-python tools/generate_voice.py --scope core   # 定型句・震度・数値のみ (129 件)
-python tools/generate_voice.py                # 震央地名・津波予報区も含む (489 件)
+python tools/generate_voice.py --scope core   # 定型句・震度・数値のみ (186 語)
+python tools/generate_voice.py                # 震央地名・震度観測地域名も含む (668 語)
+python tools/generate_voice.py --dry-run      # 読み上げ文の一覧だけ見る
 ```
 
-クリップが無いときはブラウザ内蔵の音声合成（Web Speech API）にフォールバックする。
-生成した音声も Git の管理対象外。
+原稿は 3 つ。
+
+| 場面 | 原稿 |
+| --- | --- |
+| 震度速報 (VXSE51) | 地震速報。最大震度6強を。宮城県北部。で観測しました。 |
+| 確定・津波なし | 地震情報。午後3時47分頃、最大震度6強を観測する地震がありました。この地震による津波の心配はありません。震源地は、宮城県沖。深さ60キロメートル。地震の規模を示すマグニチュードは、7.3と、推定されています。 |
+| 確定・津波発表中 | （同上、津波の一文が）現在、津波予報等を発表中です。 |
+
+震央地名・震度観測地域名・震度・時刻・深さ・マグニチュードはすべて部品として
+持っているので、設定モードで決めた任意の震源についても読み上げられる。
+クリップが無いときはブラウザ内蔵の音声合成（Web Speech API）に落ちる。
+単一 HTML へは `tools/build_bundle.py --voice` で埋め込む。生成した音声は
+差し替え音源と同じく Git の管理対象外。
 
 ## 構成
 
@@ -438,7 +452,7 @@ tools/                データ生成
   build_subdivision_polygons.py  細分区域・都道府県界のポリゴン
   build_bathymetry.py 海底地形の陰影図
   build_bundle.py     単一 HTML へのバンドル
-  generate_voice.py   Gemini TTS で読み上げクリップを生成
+  generate_voice.py   Scratch の音声合成で読み上げクリップを生成
 
 web/                  地震モニタ
   js/mapview.js       地図・観測点・波面の描画

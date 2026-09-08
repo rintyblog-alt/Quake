@@ -68,23 +68,26 @@ data URI として埋め込まれ、サーバーを立てずに音つきで開�
 再配布はできません。手元で利用する場合も、配布元の利用条件を確認してください。
 本リポジトリが同梱するのは合成音の生成コードのみです。
 
-## 読み上げ音声 (Gemini TTS)
+## 読み上げ音声 (Scratch の音声合成)
 
-地震情報・津波予報のアナウンスは `web/sounds/voice/` に置いた短いクリップを
-つなげて再生します。クリップが無い場合はブラウザの Web Speech API に
-フォールバックします。
-
-クリップは `tools/generate_voice.py` が Gemini の TTS で生成します。
+地震情報のアナウンスは `web/sounds/voice/` に置いた短いクリップをつないで
+再生します。声は Scratch の音声合成の「ネズミ」＝ アルト (ja-JP / female) を
+1.19 倍の速さで鳴らしたもので、倍率は再生側 (`web/js/sound.js`) で掛けます。
 
 ```bash
-export GEMINI_API_KEY=...            # または GOOGLE_API_KEY
-python tools/generate_voice.py --scope core   # 定型句・震度・数値のみ (129 件)
-python tools/generate_voice.py                # 震央地名・津波予報区も含む (489 件)
+python tools/generate_voice.py --scope core   # 定型句・震度・数値のみ (186 語)
+python tools/generate_voice.py                # 地名も含めて全部 (668 語)
+python tools/generate_voice.py --dry-run      # 読み上げ文の一覧だけ
+python tools/generate_voice.py --voice alto   # ふつうの声で作る
 ```
 
-- 出力は 24 kHz モノラルの WAV と、索引の `voice/index.json`
-- 途中で止めても再開できます（`index.json` にあるものは飛ばします）
-- `--dry-run` で生成される語句の一覧だけ確認できます
-- `--voice` で話者、`--model` でモデル、`--interval` で送信間隔を変えられます
+- 合成には Scratch の合成サーバ (`synthesis-service.scratch.mit.edu`) を使います。
+  API キーは要りません。
+- 出力は mp3 と、索引の `voice/index.json`。同じ読み上げ文は 1 ファイルを
+  共有するので、668 語でも実ファイルは 531 個です。
+- 途中で止めても再開できます（既にあるファイルは飛ばします）。
+- 読み上げは必ず効果音が鳴り終わってから始まります。
+- クリップが無い場面はブラウザの Web Speech API にフォールバックします
+  （緊急地震速報と津波予報は今のところこちら）。
 
 生成物は `.gitignore` で除外されており、リポジトリには入りません。

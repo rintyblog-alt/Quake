@@ -85,6 +85,35 @@ def embed_sounds(bundle: dict) -> None:
 MIME = {".mp3": "audio/mpeg", ".ogg": "audio/ogg", ".wav": "audio/wav", ".m4a": "audio/mp4"}
 
 
+def embed_voice(bundle: dict) -> None:
+    """読み上げ音声 (tools/generate_voice.py) を data URI で埋め込む.
+
+    同じ読み上げ文は 1 ファイルを共有しているので、対応表に出てくる
+    ファイル名を重複なく拾う。
+    """
+    voice_dir = WEB / "sounds" / "voice"
+    index_path = voice_dir / "index.json"
+    if not index_path.exists():
+        print("  [警告] web/sounds/voice/index.json が無いので読み上げ音声は埋め込みません")
+        return
+    index = json.loads(index_path.read_text(encoding="utf-8"))
+    bundle["sounds/voice/index.json"] = index
+
+    total = 0
+    for name in sorted({c["file"] for c in index.get("clips", {}).values()}):
+        path = voice_dir / name
+        if not path.exists():
+            print(f"  [警告] 読み上げ音声が見つかりません: {name}")
+            continue
+        raw = path.read_bytes()
+        mime = MIME.get(path.suffix.lower(), "audio/mpeg")
+        bundle["sounds/voice/" + name] = f"data:{mime};base64," + base64.b64encode(raw).decode("ascii")
+        total += len(raw)
+    print(f"  読み上げ音声 {len(index.get('clips', {}))} 語 "
+          f"/ {len(set(c['file'] for c in index.get('clips', {}).values()))} ファイル "
+          f"({total / 1024 / 1024:.2f} MB) を埋め込みました")
+
+
 def downsample(mask_payload: dict, factor: int) -> dict:
     """陸域マスクを粗くする.
 
@@ -127,6 +156,8 @@ def main() -> int:
                          "(表示は補間するので滑らかなまま。バンドルを軽くするため)")
     ap.add_argument("--sounds", action="store_true",
                     help="web/sounds/ の差し替え音源も埋め込む (手元で使う分だけ)")
+    ap.add_argument("--voice", action="store_true",
+                    help="web/sounds/voice/ の読み上げ音声も埋め込む")
     args = ap.parse_args()
 
     html = (WEB / "index.html").read_text(encoding="utf-8")
@@ -149,6 +180,8 @@ def main() -> int:
 
     if args.sounds:
         embed_sounds(bundle)
+    if args.voice:
+        embed_voice(bundle)
 
     names = [s for s in args.scenarios if s and s != "none"]
     index_path = WEB / "data" / "scenarios" / "index.json"
