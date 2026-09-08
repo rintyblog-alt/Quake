@@ -808,6 +808,7 @@
       if (this.phase === 'final') {
         v.drawObservedSubdivisions(this.areaIntensity);
         v.drawStationShindo(cur.final);
+        v.drawSubdivisionTiles(this.areaIntensity);
         if (cur.tsunami && this.firedTsunami) v.drawTsunami(cur.tsunami, this.t);
       } else {
         if (cur.tsunami && this.firedTsunami) v.drawTsunami(cur.tsunami, this.t);

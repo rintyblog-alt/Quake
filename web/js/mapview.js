@@ -226,12 +226,11 @@
     var ctx = this.ctx, p = this.proj, U = global.Util;
     var lat = this.stations.lat, lon = this.stations.lon;
     var n = lat.length;
-    var side = U.clamp(14.0 * Math.pow(p.zoom, 0.40), 12.0, 46.0);
-    var margin = 30;
+    var radius = U.clamp(7.0 * Math.pow(p.zoom, 0.40), 6.0, 22.0);
+    var showNumber = radius >= 6.0;
+    var margin = 26;
 
-    // タイルは少し重なる。地震情報の地点震度表示と同じで、詰まったところは
-    // 強い震度が上に乗る。
-    var cell = side * 0.88;
+    var cell = radius * 1.62;
     var cols = Math.ceil((this.cssWidth + margin * 2) / cell) + 1;
     var isSea = this.seafloor;
     var sea = [];
@@ -240,7 +239,7 @@
 
     // まだ揺れていない観測点も同じ間引きに掛ける。ここで落としてしまうと
     // 波面の外側だけ観測点が消え、地図に不自然な円の縁ができる。
-    // 海底観測点はもともと疎なので間引かず、陸のタイルの取り合いにもしない。
+    // 海底観測点はもともと疎なので間引かず、陸の丸の取り合いにもしない。
     for (i = 0; i < n; i++) {
       var v = values ? values[i] : -3;
       var pt = p.project(lat[i], lon[i]);
@@ -255,24 +254,23 @@
       if (!cur || v > cur[2]) best[key] = [pt[0], pt[1], v, this.stationPGA(values, i)];
     }
 
-    // 震度 1 に届かない観測点はタイルにせず (気象庁も発表しない)、
-    // 揺れの大きさに応じて濃さを変えた点で描く。段階を細かく取ることで、
-    // 波面のところで見た目が急に切り替わらない。
+    // 震度 0 に届かない観測点は、値に応じて大きさと濃さを落とした点で描く。
+    // 段階を細かく取ることで、波面のところで見た目が急に切り替わらない。
     var quiet = new Array(PGA_BUCKETS);
     var groups = {};
     for (var key2 in best) {
       var e = best[key2];
-      if (e[2] < 0.5) {
+      if (e[2] < -0.5) {
         var qb = pgaBucket(e[3]);
         (quiet[qb] || (quiet[qb] = [])).push(e);
         continue;
       }
       var cls0 = U.shindoClass(e[2]);
-      (groups[cls0] || (groups[cls0] = [])).push(e);
+      (groups[cls0] || (groups[cls0] = [])).push([e[0], e[1]]);
     }
 
     ctx.save();
-    var qr = Math.max(side * 0.22, 2.4);
+    var qr = Math.max(radius * 0.44, 2.4);
     for (var qb2 = 0; qb2 < PGA_BUCKETS; qb2++) {
       var qlist = quiet[qb2];
       if (!qlist) continue;
@@ -287,7 +285,37 @@
     ctx.restore();
 
     this.drawSeafloorDots(sea, qr);
-    this.drawShindoTiles(groups, side);
+
+    // 揺れているあいだは丸のまま。四角のタイルは地震情報 (確定) だけで使う。
+    ctx = this.ctx;
+    ctx.save();
+    var order = U.shindoOrder;
+    ctx.lineWidth = Math.max(1.6, radius * 0.17);
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.font = '800 ' + Math.round(radius * 1.18) + 'px ' + TILE_FONT;
+
+    for (var k = 0; k < order.length; k++) {
+      var list = groups[order[k]];
+      if (!list) continue;
+      var path = new Path2D();
+      for (i = 0; i < list.length; i++) {
+        path.moveTo(list[i][0] + radius, list[i][1]);
+        path.arc(list[i][0], list[i][1], radius, 0, Math.PI * 2);
+      }
+      ctx.fillStyle = U.shindoColor(order[k]);
+      ctx.strokeStyle = 'rgba(255,255,255,0.95)';
+      ctx.fill(path);
+      ctx.stroke(path);
+      if (showNumber) {
+        ctx.fillStyle = U.shindoTextColor(order[k]);
+        var label = U.shindoShort(order[k]);
+        for (i = 0; i < list.length; i++) {
+          ctx.fillText(label, list[i][0], list[i][1] + radius * 0.04);
+        }
+      }
+    }
+    ctx.restore();
   };
 
   /* 色だけの円 (強震モニタ風の連続配色) */
@@ -492,81 +520,78 @@
     ctx.restore();
   };
 
-  MapView.prototype.drawSubdivisionBadges = function (areaIntensity) {
+  /* 確定震度のタイル。地点ごとではなく細分区域ごとに 1 つ置く。
+   *
+   * 地点の数だけ出すと画面が埋まってしまうので、区域の代表点にまとめる。
+   * 重なるところは強い震度を残す (弱いほうを落とす)。 */
+  MapView.prototype.drawSubdivisionTiles = function (areaIntensity) {
     if (!this.subCentroids) return;
-    var ctx = this.ctx, p = this.proj, U = global.Util;
-    var placed = [];
+    var p = this.proj, U = global.Util;
+    var side = U.clamp(17.0 * Math.pow(p.zoom, 0.34), 17.0, 48.0);
     var entries = [];
     for (var a = 0; a < this.subCentroids.length; a++) {
       if (areaIntensity[a] >= 0.5) entries.push([a, areaIntensity[a]]);
     }
     entries.sort(function (x, y) { return y[1] - x[1]; });
 
-    ctx.save();
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
+    var placed = [], groups = {}, gap = side * 1.02;
     for (var k = 0; k < entries.length; k++) {
       var c = this.subCentroids[entries[k][0]];
       var pt = p.project(c[0], c[1]);
-      if (pt[0] < 12 || pt[0] > this.cssWidth - 12 || pt[1] < 12 || pt[1] > this.cssHeight - 12) continue;
-      var w = 30, h = 26, clash = false;
+      if (pt[0] < -side || pt[0] > this.cssWidth + side ||
+          pt[1] < -side || pt[1] > this.cssHeight + side) continue;
+      var clash = false;
       for (var m = 0; m < placed.length; m++) {
-        if (Math.abs(placed[m][0] - pt[0]) < w * 1.1 && Math.abs(placed[m][1] - pt[1]) < h * 1.1) {
+        if (Math.abs(placed[m][0] - pt[0]) < gap && Math.abs(placed[m][1] - pt[1]) < gap) {
           clash = true; break;
         }
       }
       if (clash) continue;
       placed.push(pt);
-
       var cls = U.shindoClass(entries[k][1]);
-      roundRect(ctx, pt[0] - w / 2, pt[1] - h / 2, w, h, 6);
-      ctx.fillStyle = U.shindoColor(cls);
-      ctx.fill();
-      ctx.lineWidth = 2.2;
-      ctx.strokeStyle = 'rgba(255,255,255,.95)';
-      ctx.stroke();
-      ctx.fillStyle = U.shindoTextColor(cls);
-      ctx.font = '800 16px "SF Mono", "Roboto Mono", monospace';
-      ctx.fillText(U.shindoShort(cls), pt[0], pt[1] + 1);
+      (groups[cls] || (groups[cls] = [])).push(pt);
     }
-    ctx.restore();
+    this.drawShindoTiles(groups, side);
   };
 
-  /* 確定表示 (地震情報) の地点震度。区域の塗り分けの上にタイルを重ねる。 */
+  /* 確定表示のときの観測点 (区域のタイルを邪魔しない小さな点) */
   MapView.prototype.drawStationShindo = function (values) {
     if (!this.stations || !this.showStations || !values) return;
-    var p = this.proj, U = global.Util;
+    var ctx = this.ctx, p = this.proj, U = global.Util;
     var lat = this.stations.lat, lon = this.stations.lon;
-    var n = lat.length, margin = 30;
-    var side = U.clamp(14.0 * Math.pow(p.zoom, 0.40), 12.0, 46.0);
-    var cell = side * 0.88;
-    var cols = Math.ceil((this.cssWidth + margin * 2) / cell) + 1;
-    var best = {}, sea = [], i;
+    var n = lat.length, margin = 16;
+    var r = U.clamp(1.6 * Math.pow(p.zoom, 0.3), 1.3, 3.4);
+    var isSea = this.seafloor;
+    var groups = {}, sea = [], i;
 
     for (i = 0; i < n; i++) {
       var v = values[i];
       var pt = p.project(lat[i], lon[i]);
       if (pt[0] < -margin || pt[0] > this.cssWidth + margin ||
           pt[1] < -margin || pt[1] > this.cssHeight + margin) continue;
-      if (this.isSeafloor(i)) {
+      if (isSea && isSea[i]) {
         sea.push([pt[0], pt[1], U.pgaFromIntensity(v)]);
         continue;
       }
       if (!(v >= 0.5)) continue;          // 震度 1 未満は発表しないので出さない
-      var key = Math.floor((pt[1] + margin) / cell) * cols + Math.floor((pt[0] + margin) / cell);
-      var cur = best[key];
-      if (!cur || v > cur[2]) best[key] = [pt[0], pt[1], v];
+      var cls = U.shindoClass(v);
+      var path = groups[cls] || (groups[cls] = new Path2D());
+      path.moveTo(pt[0] + r, pt[1]);
+      path.arc(pt[0], pt[1], r, 0, Math.PI * 2);
     }
 
-    this.drawSeafloorDots(sea, Math.max(side * 0.22, 2.4));
+    this.drawSeafloorDots(sea, Math.max(r * 1.5, 2.4));
 
-    var groups = {};
-    for (var key2 in best) {
-      var e = best[key2];
-      var cls = U.shindoClass(e[2]);
-      (groups[cls] || (groups[cls] = [])).push(e);
+    ctx.save();
+    ctx.globalAlpha = 0.85;
+    for (var cls2 in groups) {
+      ctx.fillStyle = U.shindoColor(cls2);
+      ctx.fill(groups[cls2]);
+      ctx.lineWidth = 0.7;
+      ctx.strokeStyle = 'rgba(255,255,255,.7)';
+      ctx.stroke(groups[cls2]);
     }
-    this.drawShindoTiles(groups, side);
+    ctx.restore();
   };
 
   /* 海底観測点。震度のタイルは付けず、強震モニタと同じ連続配色の点で出す。 */
