@@ -2,9 +2,11 @@
  * ほぼ黒のパネルと、海底地形を敷いた地図。震度は数字入りの円で表す。 */
 
 :root {
-  --panel: #0d0e11;
-  --panel-2: #14161a;
-  --panel-3: #1e2127;
+  --panel: #0d1118;
+  --panel-2: #1d2a40;
+  --panel-3: #2c3d59;
+  /* 左パネルの中身の幅。文字や余白はこの幅に対する比で決める。 */
+  --card-w: 366px;
   --line: rgba(255, 255, 255, 0.09);
   --line-2: rgba(255, 255, 255, 0.20);
   --text: #eef0f2;
@@ -20,6 +22,7 @@
   --rail-w: 44px;
   --rail-h: 40px;   /* 画面が狭いとき、アイコン列を横並びにしたときの高さ */
   --mono: "SF Mono", "Roboto Mono", Consolas, ui-monospace, monospace;
+  --num: "Hiragino Sans", "Noto Sans JP", "Yu Gothic UI", "Meiryo", system-ui, sans-serif;
   --sans: "Hiragino Sans", "Noto Sans JP", "Yu Gothic UI", system-ui, sans-serif;
 }
 
@@ -54,84 +57,132 @@ html, body {
 
 /* ---- 緊急地震速報 ---- */
 #eew-panel {
-  border: 1px solid rgba(217, 43, 31, .45); border-radius: 5px; overflow: hidden;
+  border-radius: calc(var(--card-w) * .036); overflow: hidden;
   background: var(--panel-2);
 }
-.eew-head { display: flex; align-items: stretch; height: 38px; }
+.eew-head { display: flex; align-items: stretch; height: calc(var(--card-w) * .132); }
 .eew-title {
-  flex: 1; display: flex; align-items: center; padding: 0 10px;
-  font-size: 17px; font-weight: 800; letter-spacing: .04em;
-  background: repeating-linear-gradient(-45deg, var(--red-deep) 0 10px, #3a0906 10px 20px);
+  flex: 1; display: flex; align-items: center; padding: 0 calc(var(--card-w) * .045);
+  font-size: calc(var(--card-w) * .074); font-weight: 800; letter-spacing: .01em;
+  background: repeating-linear-gradient(-45deg, var(--red-deep) 0 9px, #1d0605 9px 18px);
 }
 .eew-grade {
-  display: flex; align-items: center; padding: 0 11px;
-  font-family: var(--mono); font-size: 15px; font-weight: 700;
-  background: var(--red); color: #fff;
+  display: flex; align-items: center; padding: 0 calc(var(--card-w) * .05);
+  font-family: var(--num); font-size: calc(var(--card-w) * .074); font-weight: 800;
+  letter-spacing: .04em; background: var(--red); color: #fff;
 }
 #eew-panel.forecast .eew-title {
-  background: repeating-linear-gradient(-45deg, #12457f 0 9px, #06203f 9px 18px);
+  background: repeating-linear-gradient(-45deg, #12457f 0 9px, #050f1e 9px 18px);
 }
 #eew-panel.forecast .eew-grade { background: #1f6fd0; }
 
-.eew-hypo { padding: 11px 13px 0; font-size: 33px; font-weight: 800; line-height: 1.12; }
-.eew-hypo .suffix { font-size: 16px; }
+.eew-hypo {
+  padding: calc(var(--card-w) * .045) calc(var(--card-w) * .04) 0;
+  font-size: calc(var(--card-w) * .112); font-weight: 800; line-height: 1.1;
+}
+.eew-hypo .suffix { font-size: calc(var(--card-w) * .062); font-weight: 500; margin-left: .1em; }
 .eew-origin {
-  padding: 4px 13px 11px; font-family: var(--mono);
-  font-size: 13px; color: var(--text-faint);
+  padding: calc(var(--card-w) * .012) calc(var(--card-w) * .04) calc(var(--card-w) * .028);
+  font-family: var(--num); font-variant-numeric: tabular-nums;
+  font-size: calc(var(--card-w) * .05); color: #c3cad4; letter-spacing: .01em;
 }
 
+/* 推定最大震度。左に「推定 / 最大震度」、右に大きな数字を置く。 */
 .shindo-box {
-  display: flex; align-items: center; gap: 10px;
-  margin: 0 11px 11px; padding: 11px 16px; border-radius: 7px;
+  display: flex; align-items: center;
+  margin: 0 calc(var(--card-w) * .035) calc(var(--card-w) * .035);
+  height: calc(var(--card-w) * .341); border-radius: calc(var(--card-w) * .058);
   background: var(--red);
 }
 .shindo-box.forecast { background: #1f6fd0; }
-.shindo-box-label { flex: 1; line-height: 1.15; }
-.shindo-box-label b { display: block; font-size: 30px; font-weight: 800; letter-spacing: .06em; }
-.shindo-box-label span { display: block; font-size: 14px; opacity: .95; margin-top: 2px; }
+.shindo-box-label { flex: 1.15; text-align: center; line-height: 1.08; }
+.shindo-box-label b {
+  display: block; font-size: calc(var(--card-w) * .112); font-weight: 800; letter-spacing: .05em;
+}
+.shindo-box-label span {
+  display: block; font-size: calc(var(--card-w) * .065); font-weight: 700; margin-top: .12em;
+}
 .shindo-box-value {
-  font-family: var(--mono); font-size: 62px; font-weight: 800; line-height: 1;
-  letter-spacing: -.03em;
+  flex: 1; text-align: center;
+  font-family: var(--num); font-size: calc(var(--card-w) * .188); font-weight: 800;
+  line-height: 1; letter-spacing: -.02em;
 }
 
 .meter {
-  display: flex; align-items: center; gap: 10px;
-  margin: 0 11px 7px; padding: 6px 0 6px 4px;
-  border-top: 1px solid var(--line);
+  display: flex; align-items: center;
+  margin: 0 calc(var(--card-w) * .04) calc(var(--card-w) * .035);
 }
-.meter-name { flex: 1; font-size: 16px; color: var(--text-dim); }
-.meter-value { font-family: var(--mono); font-size: 38px; font-weight: 700; line-height: 1.05; }
-.meter-bar { width: 15px; height: 40px; border-radius: 3px; background: #2b2f36; flex: 0 0 auto; }
+.meter-name { flex: 1; font-size: calc(var(--card-w) * .07); color: var(--text); }
+.meter-value {
+  font-family: var(--num); font-variant-numeric: tabular-nums;
+  font-size: calc(var(--card-w) * .124); font-weight: 800; line-height: 1;
+  margin-right: calc(var(--card-w) * .03);
+}
+.meter-bar {
+  width: calc(var(--card-w) * .082); height: calc(var(--card-w) * .182);
+  border-radius: calc(var(--card-w) * .012); background: #2b2f36; flex: 0 0 auto;
+}
 
 .eew-message {
-  margin: 0; padding: 8px 13px 11px; font-size: 14px; line-height: 1.5;
-  color: var(--yellow);
+  margin: 0;
+  padding: calc(var(--card-w) * .02) calc(var(--card-w) * .04) calc(var(--card-w) * .045);
+  font-size: calc(var(--card-w) * .059); line-height: 1.45; font-weight: 600;
+  color: #e8776a;
 }
 #eew-panel.forecast .eew-message { color: #9fd0ff; }
 
 /* ---- 揺れを検出 ---- */
-#detect-panel { border: 1px solid var(--line); border-radius: 5px; overflow: hidden; background: var(--panel-2); }
+#detect-panel {
+  border-radius: calc(var(--card-w) * .036); overflow: hidden; background: var(--panel-2);
+}
 .section-bar {
-  padding: 8px 0; text-align: center; font-size: 16px; font-weight: 700;
+  padding: calc(var(--card-w) * .028) 0; text-align: center;
+  font-size: calc(var(--card-w) * .07); font-weight: 800;
   background: var(--panel-3); letter-spacing: .06em;
 }
-.detect-top { display: flex; align-items: center; gap: 10px; padding: 11px 13px; }
-.detect-label { flex: 1; font-size: 15px; line-height: 1.3; color: var(--text-dim); }
-.detect-label b { color: var(--text); font-size: 17px; }
+.detect-top {
+  display: flex; align-items: center; gap: calc(var(--card-w) * .03);
+  padding: calc(var(--card-w) * .038) calc(var(--card-w) * .04);
+}
+.detect-label {
+  flex: 1; font-size: calc(var(--card-w) * .073); line-height: 1.25;
+  font-weight: 700; color: var(--text);
+}
+.detect-label b { display: block; color: var(--text); font-weight: 800; }
 
 .shindo-badge {
-  min-width: 44px; height: 34px; padding: 0 8px;
-  display: flex; align-items: center; justify-content: center; border-radius: 4px;
-  font-family: var(--mono); font-size: 20px; font-weight: 800; line-height: 1;
-  background: #2b2f36; color: #fff;
+  min-width: calc(var(--card-w) * .135); height: calc(var(--card-w) * .105);
+  padding: 0 calc(var(--card-w) * .02);
+  display: flex; align-items: center; justify-content: center;
+  border-radius: calc(var(--card-w) * .022);
+  font-family: var(--num); font-size: calc(var(--card-w) * .082); font-weight: 800;
+  line-height: 1; background: #2b2f36; color: #fff;
 }
-.shindo-badge.lg { min-width: 86px; height: 62px; font-size: 42px; border-radius: 6px; }
-.shindo-badge.sm { min-width: 36px; height: 29px; font-size: 18px; border-radius: 4px; }
+.shindo-badge i {
+  font-style: normal; font-size: .58em; line-height: 1; align-self: flex-start;
+  margin-top: .16em;
+}
+.shindo-box-value i, .final-shindo i {
+  font-style: normal; font-size: .55em; vertical-align: .62em; margin-left: .02em;
+}
+.shindo-badge.lg {
+  min-width: calc(var(--card-w) * .265); height: calc(var(--card-w) * .294);
+  font-size: calc(var(--card-w) * .218); border-radius: calc(var(--card-w) * .03);
+}
+.shindo-badge.sm {
+  min-width: calc(var(--card-w) * .115); height: calc(var(--card-w) * .09);
+  font-size: calc(var(--card-w) * .072); border-radius: calc(var(--card-w) * .018);
+}
 
-.detect-list, .final-areas { list-style: none; margin: 0; padding: 0 9px 9px; }
+.detect-list, .final-areas {
+  list-style: none; margin: 0;
+  padding: 0 calc(var(--card-w) * .035) calc(var(--card-w) * .028);
+}
 .detect-list li, .final-areas li {
-  display: flex; align-items: center; gap: 10px; padding: 5px 0;
+  display: flex; align-items: center; gap: calc(var(--card-w) * .03);
+  padding: calc(var(--card-w) * .014) 0;
   border-top: 1px solid var(--line);
+  font-size: calc(var(--card-w) * .073); font-weight: 700;
 }
 .detect-list li:first-child, .final-areas li:first-child { border-top: 0; }
 .area-name { font-size: 16px; font-weight: 600; }
@@ -300,9 +351,9 @@ html, body {
 .style-btn:hover { color: #fff; }
 .style-btn.active { background: var(--accent); color: #04121c; font-weight: 700; }
 .legend-body { display: flex; gap: 7px; }
-#legend-bar { display: block; width: 20px; height: 130px; border-radius: 2px; }
+#legend-bar { display: block; width: 20px; height: 168px; border-radius: 2px; }
 .legend-list {
-  list-style: none; margin: 0; padding: 0; height: 130px;
+  list-style: none; margin: 0; padding: 0; height: 168px;
   display: flex; flex-direction: column;
 }
 .legend-list li { flex: 1; font-size: 12px; line-height: 26px; white-space: nowrap; }
@@ -314,7 +365,7 @@ html, body {
 }
 .coast-list { list-style: none; margin: 5px 0 0; padding: 0; }
 .coast-list li { display: flex; align-items: center; gap: 7px; font-size: 11px; padding: 2px 0; }
-.coast-list i { width: 22px; height: 7px; border-radius: 4px; }
+.coast-list i { width: 24px; height: 10px; border-radius: 5px; }
 
 /* ---- 観測波形 ---- */
 #wave-strip {
@@ -417,11 +468,15 @@ button.ghost:hover { color: #fff; border-color: var(--accent); }
 /* ================= 画面が狭いとき ================= */
 .sheet-only { display: none; }
 
-@media (max-width: 1100px) { :root { --side-w: 300px; } }
-@media (max-width: 900px) { :root { --side-w: 260px; } }
+@media (max-width: 1100px) { :root { --side-w: 300px; --card-w: 282px; } }
+@media (max-width: 900px)  { :root { --side-w: 260px; --card-w: 242px; } }
+/* 縦が短い画面ではパネルが収まらないので、文字の基準も詰める */
+@media (max-height: 860px) and (min-width: 721px) { :root { --card-w: 318px; } }
+@media (max-height: 740px) and (min-width: 721px) { :root { --card-w: 272px; } }
 
 /* --- スマートフォン: パネルを下からのシートにする --- */
 @media (max-width: 720px) {
+  :root { --card-w: calc((100vw - 18px) * .78); }
   :root {
     --side-w: 0px; --rail-w: 0px;
     --sheet-h: 46vh;
@@ -504,8 +559,8 @@ button.ghost:hover { color: #fff; border-color: var(--accent); }
   #app.sheet-collapsed .coast-legend { bottom: calc(var(--rail-h) + 46px); }
   .legend-head { margin-bottom: 4px; gap: 6px; }
   .legend-title { font-size: 10px; }
-  #legend-bar { width: 11px; height: 74px; }
-  .legend-list { height: 74px; }
+  #legend-bar { width: 11px; height: 104px; }
+  .legend-list { height: 104px; }
   .legend-list li { font-size: 10px; }
   .coast-list li { font-size: 10px; }
   .coast-list i { width: 16px; height: 5px; }
@@ -549,6 +604,7 @@ button.ghost:hover { color: #fff; border-color: var(--accent); }
 
 /* --- 縦が短いとき (横向きのスマートフォンなど) --- */
 @media (max-height: 540px) and (min-width: 721px) {
+  :root { --card-w: 232px; }
   :root { --side-w: 250px; }
   html, body { font-size: 12px; }
 
@@ -580,7 +636,7 @@ button.ghost:hover { color: #fff; border-color: var(--accent); }
   .zoom-ctl { bottom: 60px; flex-direction: row; gap: 5px; }
   .zoom-ctl button { width: 34px; height: 34px; font-size: 17px; }
   .legend, .coast-legend { bottom: 60px; padding: 5px 6px; }
-  #legend-bar { width: 12px; height: 84px; }
-  .legend-list { height: 84px; }
+  #legend-bar { width: 12px; height: 112px; }
+  .legend-list { height: 112px; }
   .legend-list li { font-size: 10px; }
 }
