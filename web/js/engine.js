@@ -360,7 +360,9 @@
 
     var num = 0;
     var maxReports = 12;
+    var giveUp = t + 45.0;          // ここまでに条件を満たさなければ発表しない
     while (num < maxReports) {
+      if (!reports.length && t > giveUp) break;   // 小さい地震は結局発表しない
       // 発表時点で検知済みの観測点数
       var used = 0;
       for (i = 0; i < idx.length; i++) { if (field.tp[idx[i]] <= t - 1.0) used++; else break; }
@@ -371,6 +373,8 @@
       var noiseM = (1 - conv) * 0.9 * Math.sin(num * 2.399 + 1.1);
       var mag = src.magnitude - (1 - conv) * 0.8 + noiseM;
       mag = Math.max(3, Math.min(9.5, mag));
+      // 震度が届かなくても、この規模なら発表する
+      if (!reports.length && mag < 3.5) { t += 1.0; continue; }
 
       var noiseP = (1 - conv) * 0.35;
       var lat = src.lat + noiseP * Math.sin(num * 1.7);
@@ -380,6 +384,8 @@
       // 推定 M での予測最大震度
       var predicted = trueMax + 1.72 * 0.58 * (mag - src.magnitude);
       predicted = global.Util.roundIntensity(predicted);
+      // 予測最大震度が震度 3 に届かないうちは発表しない (気象庁と同じ)
+      if (!reports.length && predicted < 2.5) { t += 1.0; continue; }
       var kind = predicted >= 4.5 ? '警報' : '予報';
 
       num++;

@@ -46,6 +46,11 @@ EEW_M_C = 4.85
 
 # 警報の発表条件
 WARNING_INTENSITY = 4.5  # 予測最大震度 5弱 以上で「警報」
+# 予測最大震度が震度 3 に届かないうちは発表しない (気象庁と同じ)。
+# 震度 0・1 しか出ない地震で緊急地震速報が鳴るのはおかしい。
+FORECAST_MIN_INTENSITY = 2.5
+FORECAST_MIN_MAGNITUDE = 3.5     # 震度が届かなくても、この規模なら発表する
+FORECAST_GIVEUP_S = 45.0         # ここまでに条件を満たさなければ発表しない
 FORECAST_INTENSITY = 2.5  # 予測最大震度 3 以上で「予報」
 
 
@@ -218,6 +223,8 @@ class EEWSimulator:
         prev_mag = None
         number = 0
         while number < max_reports:
+            if not reports and next_t > t_first + FORECAST_GIVEUP_S:
+                break          # 小さい地震は結局発表しない
             used = order[trig[order] <= next_t - self.processing_delay]
             if used.size < 2:
                 next_t += self.report_interval
@@ -234,9 +241,17 @@ class EEWSimulator:
             )
             mag = self.estimate_magnitude(amp, r)
             mag = float(np.clip(mag, 2.0, 9.5))
+            if not reports and mag < FORECAST_MIN_MAGNITUDE:
+                next_t += self.report_interval
+                continue
 
             inten = self.predict_intensity(la, lo, dep, mag, true_kind)
             max_i = round_intensity(float(np.max(inten)))
+            if not reports and max_i < FORECAST_MIN_INTENSITY:
+                # 震度 3 に届かないうちは第 1 報を出さない。あとで推定が
+                # 上がってくれば、そこから発表を始める。
+                next_t += self.report_interval
+                continue
             kind = "警報" if max_i >= WARNING_INTENSITY else "予報"
 
             warn_regions: list[str] = []
