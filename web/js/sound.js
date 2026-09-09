@@ -417,14 +417,13 @@
    * 読み上げは必ず効果音が鳴り終わってから始める (noteEffect / _effectEndsAt)。
    */
 
-  var VOICE_GAP = 0.0;             // 部品と部品のあいだ [s]
-  var VOICE_XFADE = 0.045;         // 部品どうしを重ねて混ぜる長さ [s]
+  var VOICE_GAP = 0.08;            // 部品と部品のあいだ [s]
   var VOICE_PAUSE = 0.28;          // 原稿の句点 (PAUSE) のところで置く間 [s]
   var PAUSE = '。';                 // 部品の列に混ぜると、そこで一拍おく
   var VOICE_AFTER_EFFECT = 0.25;   // 効果音が終わってから読み始めるまで [s]
   var VOICE_GAIN = 0.9;
   var TRIM_THRESHOLD = 0.015;      // 無音とみなす振幅 (最大振幅に対する比)
-  var TRIM_MARGIN = 0.02;          // 切り詰めたあとに残す余白 [s]
+  var TRIM_MARGIN = 0.03;          // 切り詰めたあとに残す余白 [s]
 
   /* 効果音の鳴り終わりを控えておく (読み上げはこの後から始める) */
   Sound.prototype.noteEffect = function (seconds) {
@@ -541,26 +540,19 @@
       var rate = self.voiceRate || 1;
       var at = self.voiceStartTime();
       self._voiceNodes = [];
-      // 部品の切れ目で音が途切れて「つぎはぎ」に聞こえないよう、
-      // 前後をわずかに重ねて混ぜる。
+      // 部品は重ねずに、わずかな間をおいて並べる。重ねて混ぜると
+      // 語尾が削れて聞き取りにくくなる。
       buffers.forEach(function (buf, i) {
         if (buf === PAUSE) { at += VOICE_PAUSE; return; }
         var cut = self.voiceTrim[self.voiceClips[wanted[i]].file] ||
                   { offset: 0, duration: buf.duration };
-        var dur = cut.duration / rate;
-        var fade = Math.min(VOICE_XFADE, dur * 0.28);
         var src = self.ctx.createBufferSource();
-        var g = self.ctx.createGain();
         src.buffer = buf;
         src.playbackRate.value = rate;
-        g.gain.setValueAtTime(0.0001, at);
-        g.gain.linearRampToValueAtTime(1.0, at + fade);
-        g.gain.setValueAtTime(1.0, Math.max(at + fade, at + dur - fade));
-        g.gain.linearRampToValueAtTime(0.0001, at + dur);
-        src.connect(g); g.connect(self.voiceOut);
+        src.connect(self.voiceOut);
         src.start(at, cut.offset, cut.duration);
         self._voiceNodes.push(src);
-        at += dur - fade + VOICE_GAP;
+        at += cut.duration / rate + VOICE_GAP;
       });
     });
     return true;
