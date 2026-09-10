@@ -133,6 +133,31 @@
     return near + (far - near) * g;
   }
 
+  /* ---------------- 波形合成との差の補正 ----------------
+   * 上の距離減衰式は「その距離での平均的な揺れ」を返すだけで、断層の
+   * 広がり方や地震波が地面を伝わるあいだの散乱までは見ていない。実際に
+   * Python 側で波形を合成して計測震度を求めた結果と突き合わせると、
+   * 震源から 200〜400 km あたりで 0.8 ほど高く出ていた (2011 年三陸沖を
+   * 再現すると震度 7 の区域が六つに広がってしまう)。
+   * 差の出方は八つのシナリオ (M5.0〜M9.0) で測った。距離が 200〜400 km
+   * のあたりで最も大きく、700 km を越えると無くなる。またマグニチュードが
+   * 小さいほど断層が点に近く波形も単純なので、差は小さくなる。
+   * (M7.3 以上で頭打ち、M6 で 4 割、M5 で 2 割) */
+  var SYNTH_AMP = 0.80;        // 差の最大値 [計測震度]
+  var SYNTH_FLOOR = 0.60;      // 震源直上に残る割合
+  var SYNTH_RISE_KM = 130.0;   // 近距離で差が小さくなる長さ
+  var SYNTH_FAR_KM = 660.0;    // 差が消えはじめる距離
+  var SYNTH_FAR_WIDTH = 170.0; // 消えるまでの幅
+  var SYNTH_MAG_REF = 7.3;     // ここから上は頭打ち
+  var SYNTH_MAG_SLOPE = 0.30;  // M が 1 小さくなるごとに 10^-0.3 倍
+
+  function synthesisCorrection(mag, r) {
+    var rise = SYNTH_FLOOR + (1 - SYNTH_FLOOR) * (1 - Math.exp(-r / SYNTH_RISE_KM));
+    var taper = 0.5 * (1 - Math.tanh((r - SYNTH_FAR_KM) / SYNTH_FAR_WIDTH));
+    var size = Math.min(1, Math.pow(10, SYNTH_MAG_SLOPE * (mag - SYNTH_MAG_REF)));
+    return -SYNTH_AMP * rise * taper * size;
+  }
+
   /* ---------------- 深発地震の異常震域 ----------------
    * 沈み込む海洋プレートは冷たく Q が高いため、スラブ内を伝わった波は
    * ほとんど減衰しない。一方、背弧側へ向かう波は高温のマントルウェッジ
@@ -266,6 +291,7 @@
       var pgv = Math.pow(10, logPgv) * this.arv[i];
       var median = 2.68 + 1.72 * Math.log10(Math.max(pgv, 1e-6))
                  + gmpeCorrection(src.magnitude, r)
+                 + synthesisCorrection(src.magnitude, r)
                  + slabBonus(src.depth, r, st.lat[i], st.lon[i]);
       inten[i] = median + (resid ? resid[i] * sigmaScale(median) : 0);
 
@@ -355,8 +381,14 @@
 
     var reports = [];
     var t = field.tp[idx[need - 1]] + 1.0 + extra;
+    // 最大震度は陸上の観測点だけで測る (海底地震計は震央の真上にあるので、
+    // 混ぜると沖合の地震ほど最大震度が実際より大きく出てしまう)
+    var sea = this.stations.seafloor;
     var trueMax = -3;
-    for (i = 0; i < n; i++) if (field.intensity[i] > trueMax) trueMax = field.intensity[i];
+    for (i = 0; i < n; i++) {
+      if (sea && sea[i]) continue;
+      if (field.intensity[i] > trueMax) trueMax = field.intensity[i];
+    }
 
     var num = 0;
     var maxReports = 12;
@@ -485,6 +517,7 @@
                  - Math.log10(r + c) - 0.002 * r;
       var med = 2.68 + 1.72 * (logPgv + Math.log10(this.arv[i]))
               + gmpeCorrection(src.magnitude, r)
+              + synthesisCorrection(src.magnitude, r)
               + slabBonus(src.depth, r, st.lat[i], st.lon[i]);
       var v = med + PHI_SITE * this.siteResid[i] * sigmaScale(med);
       if (v > best) best = v;
@@ -555,8 +588,13 @@
     var finals = new Float32Array(field.intensity.length);
     for (var i = 0; i < finals.length; i++) finals[i] = global.Util.roundIntensity(field.intensity[i]);
 
+    // 発表する最大震度は陸上の観測点から選ぶ
+    var sea = this.stations.seafloor;
     var maxI = -3, maxIdx = 0;
-    for (i = 0; i < finals.length; i++) if (finals[i] > maxI) { maxI = finals[i]; maxIdx = i; }
+    for (i = 0; i < finals.length; i++) {
+      if (sea && sea[i]) continue;
+      if (finals[i] > maxI) { maxI = finals[i]; maxIdx = i; }
+    }
 
     return {
       source: {
