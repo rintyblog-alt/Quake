@@ -51,7 +51,7 @@ SPEAKER_NAME = "四国めたん"
 #           暗く聞こえるので、標準 (1.0) からわずかに下げるだけにする
 #   前後の間 クリップをつないで鳴らすので短くしておく
 SPEED_SCALE = 1.2
-INTONATION_SCALE = 0.93
+INTONATION_SCALE = 0.88
 PITCH_SCALE = 0.0
 PRE_PHONEME = 0.02
 POST_PHONEME = 0.04
