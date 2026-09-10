@@ -794,3 +794,10 @@ body.media #clock-pill { display: none; }
   cursor: pointer;
 }
 .am-ok:hover { background: rgba(74, 157, 255, 0.1); }
+
+/* 読み上げ音声のクレジット (VOICEVOX の利用規約による) */
+.credit {
+  margin: 6px 9px 4px;
+  font-size: 11px; line-height: 1.5;
+  color: var(--text-dim);
+}

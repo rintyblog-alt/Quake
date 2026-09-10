@@ -322,6 +322,7 @@
     this.predictedArea = null;
     this.warnPrefSince = {};   // 府県 -> 警報の対象になった時刻 (テロップの点滅に使う)
     this.lastChimed = null;
+    this.saidPrefs = [];
     this.areaMailShown = false;
     if (this.sound) this.sound.cancelSpeech();
     P.hideAreaMail();
@@ -837,7 +838,11 @@
       this.eewReport = r;
       this.updatePrediction(r);
       P.showEEW(r, cur.originDate);
-      if (r.kind === '警報') { this.showMediaEEW(r); this.maybeAreaMail(r); }
+      if (r.kind === '警報') {
+        this.showMediaEEW(r);
+        this.maybeAreaMail(r);
+        if (this.mode === 'media') this.announceWarningAreas();
+      }
       this.firedReports++;
     }
 
@@ -1390,6 +1395,24 @@
       ctx.strokeStyle = EDGE[order[g]];
       for (i = 0; i < list.length; i++) ctx.stroke(list[i]);
     }
+  };
+
+  /* 警報の読み上げ。
+   *
+   * 最初の警報では対象の府県を全部読み、続報で増えたときは増えた分だけを
+   * 読む。前の読み上げがまだ終わっていなければ鳴らさず、次の報に回す
+   * (読み上げた府県だけを覚えるので、取りこぼしはそのまま次に持ち越す)。 */
+  App.announceWarningAreas = function () {
+    var prefs = this.warningPrefs();
+    if (!prefs.length) return;
+    var said = this.saidPrefs || (this.saidPrefs = []);
+    var fresh = [];
+    for (var i = 0; i < prefs.length; i++) {
+      if (said.indexOf(prefs[i].name) < 0) fresh.push(prefs[i].name);
+    }
+    if (!fresh.length) return;
+    if (!this.sound.announceWarning(fresh, said.length > 0)) return;
+    for (i = 0; i < fresh.length && i < 12; i++) said.push(fresh[i]);
   };
 
   /* ---------------- エリアメール ----------------

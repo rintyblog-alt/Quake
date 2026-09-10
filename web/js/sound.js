@@ -361,6 +361,34 @@
     }
   };
 
+  /* ---------------- 警報の読み上げ (VOICEVOX 四国めたん) ----------------
+   *
+   *   緊急地震速報です。緊急地震速報です。
+   *   強い揺れが予想される地域をお伝えします。（地域名）
+   *   対象地域では、慌てずに、まず身の安全を確保してください。
+   *
+   * 続報で地域が増えたときは、頭を「緊急地震速報の続報です。」に替えて
+   * 増えた地域だけを読む。まだ前の読み上げが終わっていなければ鳴らさない
+   * (false を返すので、呼ぶ側は次の機会に回せる)。 */
+  Sound.prototype.warningVoiceBusy = function () {
+    return !!(this.ctx && this._voiceEndsAt && this.ctx.currentTime < this._voiceEndsAt);
+  };
+
+  Sound.prototype.announceWarning = function (prefs, isUpdate) {
+    this.unlock();
+    if (!prefs || !prefs.length) return false;
+    if (this.warningVoiceBusy()) return false;
+    var seq = [isUpdate ? 'mt_warn_update' : 'mt_warn_lead'];
+    for (var i = 0; i < prefs.length && i < 12; i++) seq.push('mt_pref_' + prefs[i]);
+    seq.push('mt_warn_tail');
+    if (!this.playSequence(seq, WARN_VOICE_GAP)) return false;
+    // 部品の読み込みは非同期なので、鳴り始めるまでのあいだも「鳴っている」
+    // ことにしておく。1〜2 秒おきの続報で読み上げが潰し合わないように。
+    this._voiceEndsAt = Math.max(this._voiceEndsAt || 0,
+                                 this.voiceStartTime() + 1.2 * seq.length);
+    return true;
+  };
+
   /* ---------------- メディアモードの音 ----------------
    * テレビで流れる緊急地震速報の音源を、最初から最後まで通しで鳴らす。
    * 第 1 報は 2 回、続報は 1 回。
@@ -457,7 +485,8 @@
    * 読み上げは必ず効果音が鳴り終わってから始める (noteEffect / _effectEndsAt)。
    */
 
-  var VOICE_GAP = 0.08;            // 部品と部品のあいだ [s]
+  var VOICE_GAP = 0.08;
+  var WARN_VOICE_GAP = 0.16;   // 警報の地域名は少し間をあけて読む            // 部品と部品のあいだ [s]
   var VOICE_PAUSE = 0.28;          // 原稿の句点 (PAUSE) のところで置く間 [s]
   var PAUSE = '。';                 // 部品の列に混ぜると、そこで一拍おく
   var VOICE_AFTER_EFFECT = 0.25;   // 効果音が終わってから読み始めるまで [s]
@@ -552,7 +581,7 @@
   }
 
   /* クリップの列を順につないで再生する (欠けている部品があれば使わない) */
-  Sound.prototype.playSequence = function (keys) {
+  Sound.prototype.playSequence = function (keys, gap) {
     if (!this.ctx || !this.enabled || !this.speechEnabled || !this.voiceClips) return false;
     var self = this;
     var wanted = keys.filter(Boolean);
@@ -578,6 +607,7 @@
       if (token !== self._voiceToken) return;
       if (buffers.some(function (b) { return !b; })) return;
       var rate = self.voiceRate || 1;
+      var space = gap == null ? VOICE_GAP : gap;
       var at = self.voiceStartTime();
       self._voiceNodes = [];
       // 部品は重ねずに、わずかな間をおいて並べる。重ねて混ぜると
@@ -588,12 +618,15 @@
                   { offset: 0, duration: buf.duration };
         var src = self.ctx.createBufferSource();
         src.buffer = buf;
-        src.playbackRate.value = rate;
+        // クリップごとに速さを持てる (声が違う部品を混ぜるため)
+        var r = self.voiceClips[wanted[i]].rate || rate;
+        src.playbackRate.value = r;
         src.connect(self.voiceOut);
         src.start(at, cut.offset, cut.duration);
         self._voiceNodes.push(src);
-        at += cut.duration / rate + VOICE_GAP;
+        at += cut.duration / r + space;
       });
+      self._voiceEndsAt = at;
     });
     return true;
   };
