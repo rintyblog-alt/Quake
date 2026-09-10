@@ -362,21 +362,32 @@
   };
 
   /* ---------------- メディアモードの音 ----------------
-   * テレビで流れる緊急地震速報のチャイム。第 1 報は 2 回、続報は 1 回鳴らす。 */
+   * テレビで流れる緊急地震速報の音源を、最初から最後まで通しで鳴らす。
+   * 第 1 報は 2 回、続報は 1 回。
+   *
+   * 鳴っているあいだに次の報が来ても重ねない。緊急地震速報は続報が
+   * 1〜2 秒おきに出るので、報のたびに鳴らすと音が途切れなくなる。 */
   Sound.prototype.mediaChime = function (times) {
     this.unlock();
     if (!this.ctx || !this.enabled || !this.buffers.eew_chime) return false;
+    var cur = this.channels.eewchime;
+    if (cur && this.ctx.currentTime < cur.hold) return false;   // まだ鳴っている
     var buf = this.buffers.eew_chime;
     var n = Math.max(1, times || 1);
     var at = this.ctx.currentTime;
-    var ok = false;
     for (var k = 0; k < n; k++) {
-      // 2 回目は前の音に続けて鳴らす (系統を潰さないように chain で足す)
-      ok = this.playSlot('eew_chime', 1.0, 'eew', buf.duration,
-                         { at: at, chain: k > 0 }) || ok;
+      // 2 回目は 1 回目の終わりに続けて鳴らす
+      this.playSlot('eew_chime', 1.0, 'eewchime', buf.duration,
+                    { at: at, chain: k > 0 });
       at += buf.duration;
     }
-    return ok;
+    return true;
+  };
+
+  /* 今この瞬間、緊急地震速報の音源が鳴っているか */
+  Sound.prototype.mediaChimeBusy = function () {
+    var cur = this.ctx && this.channels.eewchime;
+    return !!(cur && this.ctx.currentTime < cur.hold);
   };
 
   /* エリアメール (緊急速報メール) のブザー */

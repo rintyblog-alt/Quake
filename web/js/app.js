@@ -322,7 +322,7 @@
     this.predictedArea = null;
     this.warnSince = {};       // 区域 -> 警報の対象になった時刻 (点滅に使う)
     this.warnPrefSince = {};   // 府県 -> 同上
-    this.mediaChimed = 0;
+    this.lastChimed = null;
     this.areaMailShown = false;
     if (this.sound) this.sound.cancelSpeech();
     P.hideAreaMail();
@@ -744,6 +744,17 @@
   };
 
   /* 続報のうち「大きく変わった」ものを見分ける */
+  /* 続報でもう一度音を鳴らすほどの変わりようか。
+   * 警報に変わった / 予想最大震度の段が上がった / 警報の対象が増えた、のどれか。 */
+  function worthChiming(prev, r) {
+    if (!prev) return true;
+    if (prev.kind !== r.kind) return true;
+    if (prev.maxIntensity < r.maxIntensity - 0.05) return true;
+    var was = prev.warningRegions || [], now = r.warningRegions || [];
+    for (var i = 0; i < now.length; i++) if (was.indexOf(now[i]) < 0) return true;
+    return false;
+  }
+
   function isMajorUpdate(prev, r) {
     return prev.kind !== r.kind
         || prev.maxShindo !== r.maxShindo
@@ -810,9 +821,20 @@
       var r = eew[this.firedReports];
       var first = this.firedReports === 0;
       if (this.mode === 'media') {
-        // テレビの緊急地震速報。第 1 報はチャイムを 2 回、続報は 1 回。
-        this.sound.mediaChime(first ? 2 : 1);
-        if (first) this.sound.announceEEW(r);
+        // テレビの緊急地震速報。音源を最初から最後まで、第 1 報は 2 回、
+        // 続報は 1 回鳴らす。
+        //
+        // ただし続報は 1〜2 秒おきに出るので、報が来るたびに鳴らすと音が
+        // 途切れなくなる。発表の内容が変わった報だけで鳴らし、まだ鳴って
+        // いるあいだは重ねない (Sound.mediaChime 側で弾く)。
+        // 音源そのものにアナウンスが入っているので合成音声は重ねない。
+        // 比べる相手は「前の報」ではなく「最後に鳴らした報」。鳴っている
+        // あいだに上がった段を取りこぼさないようにする。
+        if (first) {
+          if (this.sound.mediaChime(2)) this.lastChimed = r;
+        } else if (worthChiming(this.lastChimed, r) && this.sound.mediaChime(1)) {
+          this.lastChimed = r;
+        }
       } else if (first) {
         // 検知の演出から緊急地震速報の画面へ移る
         if (r.kind === '警報') this.sound.warning(); else this.sound.forecast();
