@@ -320,8 +320,7 @@
     this._tween = null;
     this.eewReport = null;
     this.predictedArea = null;
-    this.warnSince = {};       // 区域 -> 警報の対象になった時刻 (点滅に使う)
-    this.warnPrefSince = {};   // 府県 -> 同上
+    this.warnPrefSince = {};   // 府県 -> 警報の対象になった時刻 (テロップの点滅に使う)
     this.lastChimed = null;
     this.areaMailShown = false;
     if (this.sound) this.sound.cancelSpeech();
@@ -483,11 +482,8 @@
     for (var a = 0; a < n; a++) out[a] = src[a] <= -2.9 ? -3 : src[a] + d;
     this.predictedArea = out;
 
-    // 新しく警報の対象になった区域を覚えておく (点滅させるため)
-    for (a = 0; a < n; a++) {
-      if (out[a] >= WARN_INTENSITY && this.warnSince[a] == null) this.warnSince[a] = this.t;
-    }
-    // 府県の単位でも同じように覚える (テロップの地域名を点滅させるため)
+    // 新しく警報の対象になった府県を覚えておく (テロップの地域名を点滅させる。
+    // 地図のほうは点滅させず、そのまま塗り足していく)
     var pref = this.areaPref;
     if (pref) {
       for (a = 0; a < n; a++) {
@@ -504,18 +500,6 @@
     var e = this.t - since;
     if (e < 0 || e >= BLINK_PERIOD * BLINK_TIMES * 2) return 0;
     return (Math.floor(e / BLINK_PERIOD) % 2) === 0 ? 1 : -1;
-  };
-
-  /* 今この瞬間に黄色く光らせる区域 */
-  App.blinkingAreas = function () {
-    var out = null;
-    for (var k in this.warnSince) {
-      if (this.blinkState(this.warnSince[k]) > 0) {
-        if (!out) out = {};
-        out[k] = 1;
-      }
-    }
-    return out;
   };
 
   /* 警報の対象になっている府県を、対象になった順に並べる */
@@ -1029,9 +1013,7 @@
         if (cur.tsunami && this.firedTsunami) v.drawTsunami(cur.tsunami, this.t);
       } else {
         // 緊急地震速報が出ていれば、予想震度を区域ごとに塗る
-        if (this.predictedArea) {
-          v.drawPredictedSubdivisions(this.predictedArea, this.blinkingAreas());
-        }
+        if (this.predictedArea) v.drawPredictedSubdivisions(this.predictedArea);
         if (cur.tsunami && this.firedTsunami) v.drawTsunami(cur.tsunami, this.t);
         if (this.t > 0) {
           v.drawWavefronts(cur.source.lat, cur.source.lon,
@@ -1328,13 +1310,12 @@
     ctx.fillStyle = '#0d2350';
     ctx.fillRect(0, 0, w, h);
 
-    // 警報の対象になった区域と、続報で新しく加わって点滅させる区域
-    var hot = {}, flash = {}, i, a;
+    // 警報の対象になった区域。続報で増えたところは点滅させず、そのまま足す。
+    var hot = {}, i, a;
     var lat0 = 90, lat1 = -90, lon0 = 200, lon1 = 0, any = false;
     for (a = 0; a < pv.length; a++) {
       if (pv[a] < WARN_INTENSITY) continue;
       hot[a] = 1;
-      if (this.blinkState(this.warnSince[a]) > 0) flash[a] = 1;
       var c = view.subCentroids[a];
       if (c[0] < lat0) lat0 = c[0];
       if (c[0] > lat1) lat1 = c[0];
@@ -1365,7 +1346,7 @@
 
     // 区域ごとに 1 枚。塗りは細分区域の単位なので、府県の一部だけが
     // 対象のときもそこだけが赤くなる。
-    var groups = { land: [], hot: [], flash: [] };
+    var groups = { land: [], hot: [] };
     for (a = 0; a < view.subRings.length; a++) {
       var rings = view.subRings[a];
       if (!rings) continue;
@@ -1381,14 +1362,14 @@
         ok = true;
       }
       if (!ok) continue;
-      groups[flash[a] ? 'flash' : (hot[a] ? 'hot' : 'land')].push(path);
+      groups[hot[a] ? 'hot' : 'land'].push(path);
     }
 
-    var FILL = { land: '#ccd1d9', hot: '#e2231c', flash: '#ffe14d' };
+    var FILL = { land: '#ccd1d9', hot: '#e2231c' };
     // 区切りが見えるように、塗りの上に必ず境界線を引く。赤の上は暗い赤、
     // 灰色の上は濃い灰色にして、どちらでも区域の形が分かるようにする。
-    var EDGE = { land: '#7b8492', hot: '#7d120d', flash: '#8a6a00' };
-    var order = ['land', 'hot', 'flash'];
+    var EDGE = { land: '#7b8492', hot: '#7d120d' };
+    var order = ['land', 'hot'];
     var g, list;
     for (g = 0; g < order.length; g++) {
       list = groups[order[g]];
