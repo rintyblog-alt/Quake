@@ -1286,7 +1286,6 @@
       ((h % 12) || 12) + '時' + d.getMinutes() + '分';
     el('me-head').textContent = report.region + 'で地震';
     el('me-warn').textContent = report.kind === '警報' ? '強い揺れ警戒' : '揺れに注意';
-    el('me-drill').classList.toggle('hidden', !this.drill);
     this.updateMediaEEW();
   };
 
@@ -1304,17 +1303,17 @@
     }
     if (!html && this.eewReport) html = '<span class="me-area">' + this.eewReport.region + '</span>';
     if (box._html !== html) { box.innerHTML = html; box._html = html; }
-    this.drawMediaThumb(prefs);
+    this.drawMediaThumb();
   };
 
   /* テロップの右下に出す小さな地図。
    *
    * 警報の対象になった府県を赤く塗る。続報で新しく加わったところは
    * しばらく黄色く点滅させてから赤に落ち着かせる。 */
-  App.drawMediaThumb = function (prefs) {
+  App.drawMediaThumb = function () {
     var cv = el('me-thumb-canvas');
-    var view = this.view;
-    if (!cv || !view.subRings || !this.areaPref) return;
+    var view = this.view, pv = this.predictedArea;
+    if (!cv || !view.subRings || !pv) return;
     var rect = cv.getBoundingClientRect();
     if (rect.width < 4) return;
     var dpr = Math.min(global.devicePixelRatio || 1, 2);
@@ -1329,15 +1328,13 @@
     ctx.fillStyle = '#0d2350';
     ctx.fillRect(0, 0, w, h);
 
-    // 塗る府県と、その周りが入るように表示範囲を決める
-    var hot = {}, flash = {};
-    for (var i = 0; i < prefs.length; i++) {
-      hot[prefs[i].name] = 1;
-      if (this.blinkState(prefs[i].since) > 0) flash[prefs[i].name] = 1;
-    }
+    // 警報の対象になった区域と、続報で新しく加わって点滅させる区域
+    var hot = {}, flash = {}, i, a;
     var lat0 = 90, lat1 = -90, lon0 = 200, lon1 = 0, any = false;
-    for (var a = 0; a < view.subCentroids.length; a++) {
-      if (!hot[this.areaPref[a]]) continue;
+    for (a = 0; a < pv.length; a++) {
+      if (pv[a] < WARN_INTENSITY) continue;
+      hot[a] = 1;
+      if (this.blinkState(this.warnSince[a]) > 0) flash[a] = 1;
       var c = view.subCentroids[a];
       if (c[0] < lat0) lat0 = c[0];
       if (c[0] > lat1) lat1 = c[0];
@@ -1366,12 +1363,12 @@
     }
     var sx = w / (lon1 - lon0), sy = h / (lat1 - lat0);
 
-    var LAND = '#c9ced6', LAND_EDGE = '#7d8794';
+    // 区域ごとに 1 枚。塗りは細分区域の単位なので、府県の一部だけが
+    // 対象のときもそこだけが赤くなる。
     var groups = { land: [], hot: [], flash: [] };
     for (a = 0; a < view.subRings.length; a++) {
       var rings = view.subRings[a];
       if (!rings) continue;
-      var pn = this.areaPref[a];
       var path = new Path2D(), ok = false;
       for (var r = 0; r < rings.length; r++) {
         var ring = rings[r], n = ring.length >> 1;
@@ -1384,18 +1381,27 @@
         ok = true;
       }
       if (!ok) continue;
-      groups[flash[pn] ? 'flash' : (hot[pn] ? 'hot' : 'land')].push(path);
+      groups[flash[a] ? 'flash' : (hot[a] ? 'hot' : 'land')].push(path);
     }
+
+    var FILL = { land: '#ccd1d9', hot: '#e2231c', flash: '#ffe14d' };
+    // 区切りが見えるように、塗りの上に必ず境界線を引く。赤の上は暗い赤、
+    // 灰色の上は濃い灰色にして、どちらでも区域の形が分かるようにする。
+    var EDGE = { land: '#7b8492', hot: '#7d120d', flash: '#8a6a00' };
     var order = ['land', 'hot', 'flash'];
-    var color = { land: LAND, hot: '#e8231c', flash: '#ffe14d' };
-    for (var g = 0; g < order.length; g++) {
-      var list = groups[order[g]];
-      ctx.fillStyle = color[order[g]];
+    var g, list;
+    for (g = 0; g < order.length; g++) {
+      list = groups[order[g]];
+      ctx.fillStyle = FILL[order[g]];
       for (i = 0; i < list.length; i++) ctx.fill(list[i], 'evenodd');
     }
-    ctx.lineWidth = 0.6;
-    ctx.strokeStyle = LAND_EDGE;
-    for (i = 0; i < groups.land.length; i++) ctx.stroke(groups.land[i]);
+    ctx.lineJoin = 'round';
+    for (g = 0; g < order.length; g++) {
+      list = groups[order[g]];
+      ctx.lineWidth = order[g] === 'land' ? 0.7 : 0.9;
+      ctx.strokeStyle = EDGE[order[g]];
+      for (i = 0; i < list.length; i++) ctx.stroke(list[i]);
+    }
   };
 
   /* ---------------- エリアメール ----------------
