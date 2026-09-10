@@ -323,7 +323,9 @@ def run(config: ScenarioConfig, data_dir: Path | None = None, verbose: bool = Tr
         return float(amp_curve[station, j])
 
     reports = eew_sim.run(trigger, amp_at, true_kind=config.kind,
-                          source=(config.lat, config.lon), seed=config.seed + 4231)
+                          source=(config.lat, config.lon), seed=config.seed + 4231,
+                          true_magnitude=config.magnitude,
+                          rupture_seconds=fault.total_rupture_duration)
 
     # -- 余震 --
     shocks = []

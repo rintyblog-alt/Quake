@@ -117,6 +117,7 @@
 
   <nav class="mode-switch" role="tablist" aria-label="モード切替">
     <button id="mode-visual" class="mode-btn active" role="tab" aria-selected="true">視覚</button>
+    <button id="mode-media" class="mode-btn" role="tab" aria-selected="false">メディア</button>
     <button id="mode-config" class="mode-btn" role="tab" aria-selected="false">設定</button>
   </nav>
 
@@ -203,6 +204,7 @@
       <label><input id="cfg-tsunami" type="checkbox" checked> 津波を自動判定する</label>
       <label><input id="cfg-eew" type="checkbox" checked> 緊急地震速報を発表する</label>
       <label><input id="cfg-drill" type="checkbox" checked> 「訓練」表示を出す</label>
+      <label><input id="cfg-areamail" type="checkbox"> エリアメールを発信する（メディアモード）</label>
     </div>
     <div class="config-preview" id="config-preview"></div>
     <div class="config-actions">
@@ -214,6 +216,71 @@
       <ul id="scenario-list" class="scenario-list"></ul>
     </div>
   </section>
+
+  <!-- ================= メディアモード ================= -->
+  <div id="media-eew" class="media-eew hidden">
+    <div class="me-banner">
+      <span class="me-tag"><b>緊急</b><b>地震</b></span>
+      <div class="me-lines">
+        <div class="me-line1">
+          <span id="me-time">－－時－－分</span>
+          <span id="me-head">－－で地震</span>
+          <span id="me-warn" class="me-warn">強い揺れ警戒</span>
+        </div>
+        <div id="me-areas" class="me-line2"></div>
+      </div>
+    </div>
+    <div class="me-thumb">
+      <div class="me-thumb-inner">
+        <span id="me-drill" class="me-drill">訓練</span>
+        <canvas id="me-thumb-canvas"></canvas>
+      </div>
+      <div class="me-cap">緊急地震速報</div>
+    </div>
+  </div>
+
+  <!-- ================= エリアメール ================= -->
+  <div id="area-mail" class="area-mail hidden">
+    <div class="am-sheet" role="dialog" aria-labelledby="am-title">
+      <div class="am-bar">緊急速報メール</div>
+      <div class="am-head">
+        <svg class="am-alert" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M12 2.4 23 21.6H1z" fill="#e8433a"/>
+          <path d="M12 8.6v6.2M12 17.2v1.6" stroke="#fff" stroke-width="2.1"
+                stroke-linecap="round" fill="none"/>
+        </svg>
+        <span id="am-title">緊急地震速報</span>
+      </div>
+      <p class="am-body">緊急地震速報<br><span id="am-place">〇〇</span>で地震発生。強い揺れに備えてください。<br>（気象庁）</p>
+      <div class="am-figure" aria-hidden="true">
+        <svg viewBox="0 0 320 320">
+          <rect x="0" y="0" width="320" height="320" rx="30" fill="#f2dc00"/>
+          <rect x="12" y="12" width="296" height="296" rx="22" fill="#111"/>
+          <rect x="34" y="34" width="252" height="252" rx="6" fill="#f2dc00"/>
+          <g fill="#111">
+            <!-- ひび割れて傾いたビル -->
+            <path d="M138 70 L214 86 L206 250 L150 250 L146 214 L158 196 L142 176 L154 152 L138 132 Z"/>
+            <!-- 落下物 -->
+            <path d="M96 176 L112 168 L110 190 L94 196 Z"/>
+            <path d="M84 214 L102 208 L98 228 L82 232 Z"/>
+            <!-- 足元の崩れ -->
+            <path d="M112 250 L124 232 L134 250 L146 230 L156 250 Z"/>
+            <!-- 揺れの線 -->
+            <path d="M236 74 L252 92 L236 110 L252 128 L236 146 L246 154 L262 136 L246 118 L262 100 L246 82 Z"/>
+            <path d="M262 96 L276 112 L262 128 L276 144 L262 160 L270 168 L284 152 L270 136 L284 120 L270 104 Z"/>
+          </g>
+          <g fill="#f2dc00">
+            <!-- 各階の窓 -->
+            <path d="M150 96 L204 107 L203 119 L149 108 Z"/>
+            <path d="M149 126 L202 137 L201 149 L148 138 Z"/>
+            <path d="M152 160 L200 169 L199 181 L151 172 Z"/>
+            <path d="M154 202 L198 210 L197 222 L153 214 Z"/>
+          </g>
+        </svg>
+      </div>
+      <button id="am-ok" class="am-ok" type="button">OK</button>
+    </div>
+  </div>
 
   <div id="toast" class="toast hidden"></div>
   <div id="loading" class="loading">データを読み込み中…</div>

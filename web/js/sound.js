@@ -44,6 +44,7 @@
     'tsunami_alarm', 'tsunami_major', 'tsunami_warning',
     'tsunami_advisory', 'tsunami_forecast',
     'countdown_tick', 'countdown_final',
+    'eew_chime', 'area_mail',
     'new_int_0', 'new_int_1', 'new_int_2', 'new_int_3',
     'new_int_4', 'new_int_5', 'new_int_6'
   ];
@@ -358,6 +359,34 @@
     for (var i = 0; i < reps; i++) {
       this.sweep(level >= 3 ? 300 : 360, level >= 3 ? 520 : 560, i * 1.0, 0.72, 0.5);
     }
+  };
+
+  /* ---------------- メディアモードの音 ----------------
+   * テレビで流れる緊急地震速報のチャイム。第 1 報は 2 回、続報は 1 回鳴らす。 */
+  Sound.prototype.mediaChime = function (times) {
+    this.unlock();
+    if (!this.ctx || !this.enabled || !this.buffers.eew_chime) return false;
+    var buf = this.buffers.eew_chime;
+    var n = Math.max(1, times || 1);
+    var at = this.ctx.currentTime;
+    var ok = false;
+    for (var k = 0; k < n; k++) {
+      // 2 回目は前の音に続けて鳴らす (系統を潰さないように chain で足す)
+      ok = this.playSlot('eew_chime', 1.0, 'eew', buf.duration,
+                         { at: at, chain: k > 0 }) || ok;
+      at += buf.duration;
+    }
+    return ok;
+  };
+
+  /* エリアメール (緊急速報メール) のブザー */
+  Sound.prototype.areaMail = function () {
+    this.unlock();
+    return this.playSlot('area_mail', 1.0, 'areamail', 1.0);
+  };
+
+  Sound.prototype.stopAreaMail = function () {
+    if (this.ctx) this.stopChannel('areamail');
   };
 
   /* 続報の通知音。震源やマグニチュードが大きく動いた報は別の音にする。 */

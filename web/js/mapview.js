@@ -426,6 +426,10 @@
    * 震度速報は都道府県ではなく細分区域 (宮城県北部・南部など) の単位で
    * 発表されるため、陸域格子に割り当てた区域番号をもとに塗り分ける。
    */
+  /* 続報で範囲が広がったときに点滅させる色 */
+  var BLINK_COLOR = '#ffe14d';
+  var BLINK_EDGE = '#fff7c0';
+
   MapView.prototype.setSubdivisions = function (payload) {
     this.subCodes = payload.codes;
     this.subNames = payload.names;
@@ -520,6 +524,54 @@
       var l2 = groups[order[k]];
       if (!l2) continue;
       for (i = 0; i < l2.length; i++) ctx.stroke(l2[i]);
+    }
+    ctx.restore();
+  };
+
+  /* 緊急地震速報の予想震度を細分区域で塗る。
+   *
+   * 観測点の色が下に見えるように、確定震度より薄く塗る。
+   * 続報で新しく警報の対象になった区域は、しばらく黄色く点滅させてから
+   * ふつうの色に落ち着かせる (テレビの緊急地震速報と同じ見せ方)。 */
+  MapView.prototype.drawPredictedSubdivisions = function (values, blink) {
+    if (!this.subRings) return;
+    var ctx = this.ctx, U = global.Util;
+    var paths = this._subPaths();
+    var groups = {}, flashing = [];
+    for (var a = 0; a < paths.length; a++) {
+      var v = values[a];
+      if (!paths[a] || !(v >= 0.5)) continue;
+      if (blink && blink[a]) { flashing.push(paths[a]); continue; }
+      var cls = U.shindoClass(v);
+      (groups[cls] || (groups[cls] = [])).push(paths[a]);
+    }
+    ctx.save();
+    ctx.globalAlpha = 0.76;
+    var order = U.shindoOrder;
+    for (var k = 0; k < order.length; k++) {
+      var list = groups[order[k]];
+      if (!list) continue;
+      ctx.fillStyle = U.shindoColor(order[k]);
+      for (var i = 0; i < list.length; i++) ctx.fill(list[i], 'evenodd');
+    }
+    if (flashing.length) {
+      ctx.globalAlpha = 0.92;
+      ctx.fillStyle = BLINK_COLOR;
+      for (i = 0; i < flashing.length; i++) ctx.fill(flashing[i], 'evenodd');
+    }
+    ctx.globalAlpha = 1;
+    ctx.lineJoin = 'round';
+    ctx.lineWidth = 0.9;
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.42)';
+    for (k = 0; k < order.length; k++) {
+      var l2 = groups[order[k]];
+      if (!l2) continue;
+      for (i = 0; i < l2.length; i++) ctx.stroke(l2[i]);
+    }
+    if (flashing.length) {
+      ctx.lineWidth = 2.0;
+      ctx.strokeStyle = BLINK_EDGE;
+      for (i = 0; i < flashing.length; i++) ctx.stroke(flashing[i]);
     }
     ctx.restore();
   };

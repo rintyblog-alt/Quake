@@ -44,6 +44,43 @@ FIRST_JITTER_S = (0.1, 0.7)       # 直下でも入れるわずかな揺らぎ [
 EEW_M_B = 1.00
 EEW_M_C = 4.85
 
+# 推定できる規模の上限
+#
+# EEW はその時点までに届いた P 波しか見ていないので、断層の破壊が続いている
+# あいだは規模を小さく見積もる。破壊継続時間は T ≒ 10^(0.5M - 2.9) 秒なので、
+# τ 秒ぶんの波形で測れる上限は M ≒ 5.8 + 2*log10(τ) になる。さらに手法自体の
+# 頭打ち (振幅が飽和して M8 あたりから伸びない) を重ねる。
+# 2011 年三陸沖 (M9.0) は第 1 報 M4.3、最終報でも M8.1 だった。
+EEW_WINDOW_C = 5.8
+EEW_WINDOW_SLOPE = 2.0
+EEW_SAT_M = 7.5
+EEW_SAT_SLOPE = 0.30
+
+# 最終報までの長さ。破壊が終わり、警戒した範囲に S 波が回りきるまで出し続ける。
+FINAL_BASE_S = 20.0
+FINAL_RUPTURE_K = 3.5
+FINAL_MAG_K = 6.0
+FINAL_MIN_S, FINAL_MAX_S = 25.0, 160.0
+
+
+def window_magnitude(tau_s: float) -> float:
+    """τ 秒ぶんの P 波で測れるマグニチュードの上限。"""
+    return EEW_WINDOW_C + EEW_WINDOW_SLOPE * np.log10(max(tau_s, 0.6))
+
+
+def saturated_magnitude(mw: float) -> float:
+    """EEW の手法そのものの頭打ちを掛けた見かけのマグニチュード。"""
+    if mw <= EEW_SAT_M:
+        return mw
+    return EEW_SAT_M + EEW_SAT_SLOPE * (mw - EEW_SAT_M)
+
+
+def final_report_span(mw: float, rupture_s: float) -> float:
+    """第 1 報から最終報までの長さ [s]。"""
+    s = FINAL_BASE_S + FINAL_RUPTURE_K * rupture_s + FINAL_MAG_K * max(0.0, mw - 5.0)
+    return float(np.clip(s, FINAL_MIN_S, FINAL_MAX_S))
+
+
 # 警報の発表条件
 WARNING_INTENSITY = 4.5  # 予測最大震度 5弱 以上で「警報」
 # 予測最大震度が震度 3 に届かないうちは発表しない (気象庁と同じ)。
@@ -180,6 +217,8 @@ class EEWSimulator:
         max_reports: int = 20,
         source: tuple[float, float] | None = None,
         seed: int = 0,
+        true_magnitude: float | None = None,
+        rupture_seconds: float = 4.0,
     ) -> list[EEWReport]:
         """検知時刻列から EEW の発表シーケンスを生成する。
 
@@ -218,6 +257,11 @@ class EEWSimulator:
 
         t_first = float(trig[order[need - 1]]) + self.processing_delay + extra
         seed = int(order[0])
+        first_arrival = float(trig[order[0]])
+        # 見かけの規模の頭打ちと、最終報までの長さ
+        sat_cap = saturated_magnitude(true_magnitude) if true_magnitude else 9.5
+        span = final_report_span(true_magnitude or 6.0, rupture_seconds)
+        final_at = 0.0
 
         next_t = t_first
         prev_mag = None
@@ -240,6 +284,9 @@ class EEWSimulator:
                 [disp_amplitude(int(i), float(e)) for i, e in zip(used, elapsed)]
             )
             mag = self.estimate_magnitude(amp, r)
+            # その時点までに見えている破壊の長さで測れる規模を超えない
+            tau = max(next_t - first_arrival, 0.6)
+            mag = min(mag, window_magnitude(tau), sat_cap)
             mag = float(np.clip(mag, 2.0, 9.5))
             if not reports and mag < FORECAST_MIN_MAGNITUDE:
                 next_t += self.report_interval
@@ -285,17 +332,23 @@ class EEWSimulator:
                 )
             )
 
-            # 推定が安定し、十分な観測点が集まったら最終報
-            if prev_mag is not None and abs(mag - prev_mag) < 0.15:
+            if len(reports) == 1:
+                final_at = next_t + span
+            # 破壊が終わり、警戒した範囲に S 波が回りきるまでは出し続ける
+            if next_t >= final_at:
+                break
+            # 推定が動かなくなったら、ある程度の時間が過ぎたところで打ち切る
+            if prev_mag is not None and abs(mag - prev_mag) < 0.05:
                 stable_count += 1
             else:
                 stable_count = 0
             enough = used.size >= min(60, max(12, order.size // 4))
-            if number >= 6 and stable_count >= 2 and enough:
+            if (number >= 6 and stable_count >= 4 and enough
+                    and next_t - reports[0].issued_at >= span * 0.45):
                 break
             prev_mag = mag
-            # 初期は 1 秒間隔、その後は間隔を広げる (実際の EEW の発表間隔に倣う)
-            next_t += self.report_interval if number >= 5 else 1.0
+            # 初期は 1 秒間隔、その後じわじわ広がる (実際の EEW の発表間隔に倣う)
+            next_t += min(12.0, 1.0 + max(0, number - 4) * 1.1)
 
         if reports:
             reports[-1].is_final = True

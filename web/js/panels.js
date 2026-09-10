@@ -162,6 +162,17 @@
 
   Panels.hideTsunami = function () { el('tsunami-panel').classList.add('hidden'); };
 
+  /* ---------------- エリアメール (緊急速報メール) ---------------- */
+  Panels.showAreaMail = function (place) {
+    el('am-place').textContent = place || '〇〇';
+    el('area-mail').classList.remove('hidden');
+  };
+
+  Panels.hideAreaMail = function () {
+    var box = el('area-mail');
+    if (box) box.classList.add('hidden');
+  };
+
   /* ---------------- 地震情報 (確定) ---------------- */
   /* 地震情報の 3 段階 (気象庁の発表順) */
   var INFO_KINDS = ['震度速報', '震源に関する情報', '震源・震度に関する情報'];

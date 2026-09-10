@@ -640,3 +640,160 @@ button.ghost:hover { color: #fff; border-color: var(--accent); }
   .legend-list { height: 112px; }
   .legend-list li { font-size: 10px; }
 }
+
+/* ================= メディアモード =================
+ * テレビの緊急地震速報のテロップを模したもの。上端に横長の帯、
+ * 右下に警報の範囲を赤く塗った地図を出す。 */
+.media-eew { position: absolute; inset: 0; pointer-events: none; z-index: 44; }
+.media-eew.hidden { display: none; }
+
+.me-banner {
+  position: absolute;
+  top: calc(12px + env(safe-area-inset-top, 0px));
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(860px, calc(100% - 32px));
+  display: flex;
+  align-items: stretch;
+  gap: 10px;
+  padding: 9px 16px 9px 10px;
+  border-radius: 10px;
+  background: linear-gradient(180deg, #f0332b 0%, #d5120e 100%);
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.55);
+  color: #fff;
+  font-family: "Hiragino Kaku Gothic ProN", "Yu Gothic", "Noto Sans JP", sans-serif;
+}
+.me-tag {
+  flex: 0 0 auto;
+  display: flex; flex-direction: column; justify-content: center; gap: 2px;
+  padding: 4px 7px;
+  border: 2px solid #fff;
+  border-radius: 4px;
+  background: #fff;
+  color: #c81613;
+  font-weight: 800;
+  font-size: 19px;
+  line-height: 1.06;
+  letter-spacing: 0.02em;
+}
+.me-lines { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; justify-content: center; gap: 2px; }
+.me-line1 {
+  display: flex; align-items: baseline; gap: 18px;
+  font-size: 25px; font-weight: 700; line-height: 1.18;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+}
+.me-warn { font-weight: 800; }
+.me-line2 {
+  font-size: 22px; font-weight: 700; line-height: 1.18;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  min-height: 26px;
+}
+.me-line2 .me-area { margin-right: 14px; }
+/* 続報で新しく警報の対象になった地域は黄色く点滅させる */
+.me-line2 .me-area.flash { color: #ffe14d; }
+
+.me-thumb {
+  position: absolute;
+  right: 18px;
+  bottom: 74px;
+  width: 200px;
+  border: 3px solid #dfe3ea;
+  border-radius: 3px;
+  overflow: hidden;
+  background: #0b1830;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.6);
+}
+.me-thumb-inner { position: relative; }
+.me-thumb-inner canvas { display: block; width: 100%; height: 176px; }
+.me-drill {
+  position: absolute; top: 5px; left: 5px;
+  padding: 2px 9px;
+  background: #1257c8; color: #fff;
+  font-size: 14px; font-weight: 800; letter-spacing: 0.08em;
+  border-radius: 2px;
+}
+.me-drill.hidden { display: none; }
+.me-cap {
+  padding: 4px 0 5px;
+  background: #d3211b; color: #fff;
+  text-align: center; font-size: 19px; font-weight: 800; letter-spacing: 0.04em;
+}
+
+/* メディアモードでは凡例などを伏せてテロップだけにする */
+body.media #legend,
+body.media #wave-strip,
+body.media #clock-pill { display: none; }
+
+/* 横長の画面では左のパネルも伏せて、地図を画面いっぱいに広げる。
+ * 縦長 (スマートフォン) は下のシートが画面の高さを決めているので、
+ * そこは触らずテロップだけを重ねる。 */
+@media (min-width: 901px) {
+  body.media #side { display: none; }
+  body.media #railbar { left: 0; }
+  body.media #map {
+    inset: 0 0 0 var(--rail-w);
+    width: calc(100vw - var(--rail-w));
+  }
+}
+
+@media (max-width: 900px) {
+  .me-banner { padding: 7px 10px 7px 8px; gap: 8px; }
+  .me-line1 { font-size: 14px; gap: 7px; }
+  .me-line2 { font-size: 15px; min-height: 19px; }
+  .me-line2 .me-area { margin-right: 9px; }
+  .me-tag { font-size: 12px; padding: 3px 5px; }
+  .me-thumb {
+    width: 132px; right: 8px;
+    bottom: calc(var(--sheet-h) + var(--rail-h) + 8px);
+  }
+  .me-thumb-inner canvas { height: 116px; }
+  .me-cap { font-size: 15px; }
+}
+
+/* ================= エリアメール (緊急速報メール) ================= */
+.area-mail {
+  position: absolute; inset: 0; z-index: 60;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(0, 0, 0, 0.55);
+}
+.area-mail.hidden { display: none; }
+.am-sheet {
+  width: min(384px, calc(100% - 32px));
+  max-height: calc(100% - 40px);
+  overflow: auto;
+  background: #1c1c1e;
+  color: #f2f2f7;
+  border-radius: 14px;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.7);
+  font-family: "Hiragino Kaku Gothic ProN", "Yu Gothic", "Noto Sans JP", sans-serif;
+}
+.am-bar {
+  padding: 7px 14px;
+  font-size: 13px; color: #a9a9b0;
+  border-bottom: 1px solid #2e2e33;
+}
+.am-head {
+  display: flex; align-items: center; gap: 9px;
+  padding: 14px 16px 6px;
+  font-size: 20px; font-weight: 700;
+}
+.am-alert { width: 26px; height: 26px; flex: 0 0 auto; }
+.am-body {
+  margin: 0;
+  padding: 6px 16px 14px;
+  font-size: 14.5px; line-height: 1.7; color: #e6e6ea;
+  line-break: strict;
+}
+.am-figure { padding: 0 16px 14px; }
+.am-figure svg { display: block; width: 100%; height: auto; }
+.am-ok {
+  display: block; width: 100%;
+  padding: 13px 0;
+  border: none; border-top: 1px solid #2e2e33;
+  border-radius: 0 0 14px 14px;
+  background: transparent;
+  color: #4a9dff; font-size: 17px; font-weight: 600;
+  cursor: pointer;
+}
+.am-ok:hover { background: rgba(74, 157, 255, 0.1); }

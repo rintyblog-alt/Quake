@@ -184,9 +184,44 @@
         self.stationArea[i] = c && codeIndex[c] != null ? codeIndex[c] : -1;
       }
       self.subNames = subdivisions.names;
+      self.areaPref = buildAreaPref(subdivisions);
       self.scratch = new Float32Array(stations.count);
     });
   };
+
+  /* ---------------- 細分区域 -> 都道府県 ----------------
+   * 緊急地震速報のテロップは都道府県の単位で地域を並べるので、区域名から
+   * 都道府県を引けるようにしておく。北海道の区域は「石狩地方北部」のように
+   * 道名を含まず、伊豆諸島も都名を含まないので、コードで補う。 */
+  var PREF_NAMES = [
+    '北海道', '青森県', '岩手県', '宮城県', '秋田県', '山形県', '福島県',
+    '茨城県', '栃木県', '群馬県', '埼玉県', '千葉県', '東京都', '神奈川県',
+    '新潟県', '富山県', '石川県', '福井県', '山梨県', '長野県', '岐阜県',
+    '静岡県', '愛知県', '三重県', '滋賀県', '京都府', '大阪府', '兵庫県',
+    '奈良県', '和歌山県', '鳥取県', '島根県', '岡山県', '広島県', '山口県',
+    '徳島県', '香川県', '愛媛県', '高知県', '福岡県', '佐賀県', '長崎県',
+    '熊本県', '大分県', '宮崎県', '鹿児島県', '沖縄県'
+  ];
+
+  function buildAreaPref(subdivisions) {
+    var names = subdivisions.names, codes = subdivisions.codes;
+    var out = new Array(names.length);
+    for (var a = 0; a < names.length; a++) {
+      var hit = '';
+      for (var k = 0; k < PREF_NAMES.length; k++) {
+        if (names[a].indexOf(PREF_NAMES[k]) === 0) { hit = PREF_NAMES[k]; break; }
+      }
+      if (!hit) hit = parseInt(codes[a], 10) < 200 ? '北海道' : '東京都';
+      out[a] = hit;
+    }
+    return out;
+  }
+
+  /* テレビのテロップ用の短い呼び方 (山形県 -> 山形) */
+  function shortPref(name) {
+    if (name === '北海道') return name;
+    return name.replace(/[都府県]$/, '');
+  }
 
   /* ---------------- 再生対象 ---------------- */
   App.adoptScenario = function (payload) {
@@ -283,7 +318,14 @@
     this.boxQuietAt = null;
     this.phase = 'detect';
     this._tween = null;
+    this.eewReport = null;
+    this.predictedArea = null;
+    this.warnSince = {};       // 区域 -> 警報の対象になった時刻 (点滅に使う)
+    this.warnPrefSince = {};   // 府県 -> 同上
+    this.mediaChimed = 0;
+    this.areaMailShown = false;
     if (this.sound) this.sound.cancelSpeech();
+    P.hideAreaMail();
 
     this.areaIntensity = this.aggregateBySubdivision(cur.final);
     this.view._subStamp = (this.view._subStamp || 0) + 1;
@@ -419,6 +461,77 @@
       if (a < 0) continue;
       if (values[i] > out[a]) out[a] = values[i];
     }
+    return out;
+  };
+
+  /* ---------------- 緊急地震速報の予想震度 ----------------
+   * 予想は「推定 M で計算し直した震度」なので、確定震度を推定 M と真の M の
+   * 差だけ上下させれば同じものになる (距離減衰式は M に対して 1.72*0.58 の
+   * 傾きを持つ)。第 1 報は M を低く見積もっているので予想も低く、報を
+   * 重ねて M が上がるにつれて予想震度も上がり、警報の範囲が広がっていく。 */
+  var MAG_TO_INTENSITY = 1.72 * 0.58;
+  var WARN_INTENSITY = 4.5;      // 震度 5弱 以上が警報の対象
+  var BLINK_PERIOD = 0.45;       // 点滅の周期 [s]
+  var BLINK_TIMES = 5;           // 点滅の回数
+
+  App.updatePrediction = function (report) {
+    var cur = this.current;
+    if (!cur || !report || !this.areaIntensity) { this.predictedArea = null; return; }
+    var d = MAG_TO_INTENSITY * (report.magnitude - cur.source.magnitude);
+    var src = this.areaIntensity, n = src.length;
+    var out = new Float32Array(n);
+    for (var a = 0; a < n; a++) out[a] = src[a] <= -2.9 ? -3 : src[a] + d;
+    this.predictedArea = out;
+
+    // 新しく警報の対象になった区域を覚えておく (点滅させるため)
+    for (a = 0; a < n; a++) {
+      if (out[a] >= WARN_INTENSITY && this.warnSince[a] == null) this.warnSince[a] = this.t;
+    }
+    // 府県の単位でも同じように覚える (テロップの地域名を点滅させるため)
+    var pref = this.areaPref;
+    if (pref) {
+      for (a = 0; a < n; a++) {
+        if (out[a] < WARN_INTENSITY) continue;
+        var pn = pref[a];
+        if (pn && this.warnPrefSince[pn] == null) this.warnPrefSince[pn] = this.t;
+      }
+    }
+  };
+
+  /* 点滅の途中かどうか。5 回点滅させたあとは普通に塗る。 */
+  App.blinkState = function (since) {
+    if (since == null) return 0;
+    var e = this.t - since;
+    if (e < 0 || e >= BLINK_PERIOD * BLINK_TIMES * 2) return 0;
+    return (Math.floor(e / BLINK_PERIOD) % 2) === 0 ? 1 : -1;
+  };
+
+  /* 今この瞬間に黄色く光らせる区域 */
+  App.blinkingAreas = function () {
+    var out = null;
+    for (var k in this.warnSince) {
+      if (this.blinkState(this.warnSince[k]) > 0) {
+        if (!out) out = {};
+        out[k] = 1;
+      }
+    }
+    return out;
+  };
+
+  /* 警報の対象になっている府県を、対象になった順に並べる */
+  App.warningPrefs = function () {
+    var pv = this.predictedArea, pref = this.areaPref;
+    if (!pv || !pref) return [];
+    var best = {};
+    for (var a = 0; a < pv.length; a++) {
+      if (pv[a] < WARN_INTENSITY) continue;
+      var pn = pref[a];
+      if (!pn) continue;
+      if (!best[pn] || pv[a] > best[pn]) best[pn] = pv[a];
+    }
+    var out = [];
+    for (var k in best) out.push({ name: k, intensity: best[k], since: this.warnPrefSince[k] });
+    out.sort(function (x, y) { return y.intensity - x.intensity; });
     return out;
   };
 
@@ -639,12 +752,24 @@
   }
 
   /* 今の時刻での全観測点の最大リアルタイム震度 */
+  /* 陸上の観測点だけで最大を取る。
+   *
+   * 海底地震計は震央の真上にあるので、混ぜると沖合の地震ほど最大震度が
+   * 実際より大きく出てしまう (気象庁が発表するのも陸上の震度)。 */
+  App.landMax = function (vals) {
+    var sea = this.stations ? this.stations.seafloor : null;
+    var mx = -3;
+    for (var i = 0; i < vals.length; i++) {
+      if (sea && sea[i]) continue;
+      if (vals[i] > mx) mx = vals[i];
+    }
+    return mx;
+  };
+
   App.peakIntensity = function () {
     var cur = this.current;
     if (!cur) return -3;
-    var vals = cur.valuesAt(this.t), mx = -3;
-    for (var i = 0; i < vals.length; i++) if (vals[i] > mx) mx = vals[i];
-    return mx;
+    return this.landMax(cur.valuesAt(this.t));
   };
 
   /* 揺れを検出した地域の読み上げ。
@@ -683,9 +808,13 @@
 
     while (this.firedReports < eew.length && eew[this.firedReports].issuedAt <= this.t) {
       var r = eew[this.firedReports];
-      if (this.firedReports === 0) {
+      var first = this.firedReports === 0;
+      if (this.mode === 'media') {
+        // テレビの緊急地震速報。第 1 報はチャイムを 2 回、続報は 1 回。
+        this.sound.mediaChime(first ? 2 : 1);
+        if (first) this.sound.announceEEW(r);
+      } else if (first) {
         // 検知の演出から緊急地震速報の画面へ移る
-        this.phase = 'monitor';
         if (r.kind === '警報') this.sound.warning(); else this.sound.forecast();
         this.sound.announceEEW(r);
       } else {
@@ -693,7 +822,12 @@
         var prev = eew[this.firedReports - 1];
         this.sound.update(prev ? isMajorUpdate(prev, r) : false);
       }
+      if (first) this.phase = 'monitor';
+      this.eewReport = r;
+      this.updatePrediction(r);
       P.showEEW(r, cur.originDate);
+      this.showMediaEEW(r);
+      this.maybeAreaMail(r);
       this.firedReports++;
     }
 
@@ -872,6 +1006,10 @@
         v.drawSubdivisionTiles(this.areaIntensity);
         if (cur.tsunami && this.firedTsunami) v.drawTsunami(cur.tsunami, this.t);
       } else {
+        // 緊急地震速報が出ていれば、予想震度を区域ごとに塗る
+        if (this.predictedArea) {
+          v.drawPredictedSubdivisions(this.predictedArea, this.blinkingAreas());
+        }
         if (cur.tsunami && this.firedTsunami) v.drawTsunami(cur.tsunami, this.t);
         if (this.t > 0) {
           v.drawWavefronts(cur.source.lat, cur.source.lon,
@@ -898,9 +1036,7 @@
       if (this.phase !== 'final') {
         var live = this.aggregateBySubdivision(vals);
         this.announceDetected(live);
-        var mx = -3;
-        for (var q = 0; q < vals.length; q++) if (vals[q] > mx) mx = vals[q];
-        P.showDetect(mx, this.topAreas(live, 6));
+        P.showDetect(this.landMax(vals), this.topAreas(live, 6));
       }
     } else if (v.stationStyle === 'coast') {
       v.drawCoastOnly(null, 0, false);
@@ -908,6 +1044,7 @@
       v.drawStations(null);
     }
     v.drawScaleBar();
+    if (this.mode === 'media') this.updateMediaEEW();
     this.updateClock();
   };
 
@@ -992,7 +1129,8 @@
       aftershocks: el('cfg-aftershock').checked,
       tsunami: el('cfg-tsunami').checked,
       eew: el('cfg-eew').checked,
-      drill: el('cfg-drill').checked
+      drill: el('cfg-drill').checked,
+      areaMail: el('cfg-areamail').checked
     };
   };
 
@@ -1024,8 +1162,11 @@
       self.cancelAftershocks();
       self._abortAftershocks = false;
       self.setDrill(c.drill);
+      self.areaMailOn = c.areaMail;
       self.adoptEngineResult(res, res.source.region + ' ' + U.formatMagnitude(c.magnitude), c.origin);
-      self.setMode('visual');
+      // エリアメールを出すならメディアモードで見せる。そうでなければ
+      // 設定を開く前に見ていたモードに戻す。
+      self.setMode(c.areaMail ? 'media' : (self.lastViewMode || 'visual'));
       self.play(true);
     }, 30);
   };
@@ -1050,7 +1191,8 @@
       self.cancelAftershocks();
       self._abortAftershocks = false;
       self.adoptScenario(payload);
-      self.setMode('visual');
+      // 設定を開く前に見ていたモード (視覚 / メディア) に戻す
+      self.setMode(self.lastViewMode || 'visual');
       self.play(true);
     }).catch(function (e) { P.toast(e.message); });
   };
@@ -1092,23 +1234,173 @@
 
   App.setMode = function (mode) {
     this.mode = mode;
-    el('mode-visual').classList.toggle('active', mode === 'visual');
-    el('mode-config').classList.toggle('active', mode === 'config');
-    el('mode-visual').setAttribute('aria-selected', String(mode === 'visual'));
-    el('mode-config').setAttribute('aria-selected', String(mode === 'config'));
+    if (mode !== 'config') this.lastViewMode = mode;
+    ['visual', 'media', 'config'].forEach(function (m) {
+      var b = el('mode-' + m);
+      if (!b) return;
+      b.classList.toggle('active', mode === m);
+      b.setAttribute('aria-selected', String(mode === m));
+    });
     el('config-panel').classList.toggle('hidden', mode !== 'config');
     el('rail-config').classList.toggle('active', mode === 'config');
     this.view.canvas.classList.toggle('picking', mode === 'config');
+    // メディアモードは左のパネルを伏せて、テレビのテロップだけを出す
+    document.body.classList.toggle('media', mode === 'media');
+    el('media-eew').classList.toggle('hidden', mode !== 'media' || !this.eewReport);
+    if (mode !== 'media') P.hideAreaMail();
+    this.view.resize();
     if (mode === 'config') { this.updateConfigPreview(); this.renderScenarioList(); }
     else this._preview = null;
+    this.draw();
   };
+
+  /* ---------------- メディアモードのテロップ ---------------- */
+  App.showMediaEEW = function (report) {
+    if (this.mode !== 'media' || !report) return;
+    el('media-eew').classList.remove('hidden');
+    var d = new Date(this.current.originDate.getTime());
+    var h = d.getHours();
+    el('me-time').textContent = (h < 12 ? '午前' : '午後') +
+      ((h % 12) || 12) + '時' + d.getMinutes() + '分';
+    el('me-head').textContent = report.region + 'で地震';
+    el('me-warn').textContent = report.kind === '警報' ? '強い揺れ警戒' : '揺れに注意';
+    el('me-drill').classList.toggle('hidden', !this.drill);
+    this.updateMediaEEW();
+  };
+
+  /* 地域名と地図は毎フレーム更新する (点滅させるため) */
+  App.updateMediaEEW = function () {
+    if (!this.eewReport) return;
+    // 地震情報が出たらテロップは引っ込める
+    if (this.phase === 'final') { el('media-eew').classList.add('hidden'); return; }
+    el('media-eew').classList.remove('hidden');
+    var prefs = this.warningPrefs();
+    var box = el('me-areas'), html = '';
+    for (var i = 0; i < prefs.length && i < 10; i++) {
+      var flash = this.blinkState(prefs[i].since) > 0 ? ' flash' : '';
+      html += '<span class="me-area' + flash + '">' + shortPref(prefs[i].name) + '</span>';
+    }
+    if (!html && this.eewReport) html = '<span class="me-area">' + this.eewReport.region + '</span>';
+    if (box._html !== html) { box.innerHTML = html; box._html = html; }
+    this.drawMediaThumb(prefs);
+  };
+
+  /* テロップの右下に出す小さな地図。
+   *
+   * 警報の対象になった府県を赤く塗る。続報で新しく加わったところは
+   * しばらく黄色く点滅させてから赤に落ち着かせる。 */
+  App.drawMediaThumb = function (prefs) {
+    var cv = el('me-thumb-canvas');
+    var view = this.view;
+    if (!cv || !view.subRings || !this.areaPref) return;
+    var rect = cv.getBoundingClientRect();
+    if (rect.width < 4) return;
+    var dpr = Math.min(global.devicePixelRatio || 1, 2);
+    if (cv.width !== Math.round(rect.width * dpr)) {
+      cv.width = Math.round(rect.width * dpr);
+      cv.height = Math.round(rect.height * dpr);
+    }
+    var ctx = cv.getContext('2d');
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    var w = rect.width, h = rect.height;
+    ctx.clearRect(0, 0, w, h);
+    ctx.fillStyle = '#0d2350';
+    ctx.fillRect(0, 0, w, h);
+
+    // 塗る府県と、その周りが入るように表示範囲を決める
+    var hot = {}, flash = {};
+    for (var i = 0; i < prefs.length; i++) {
+      hot[prefs[i].name] = 1;
+      if (this.blinkState(prefs[i].since) > 0) flash[prefs[i].name] = 1;
+    }
+    var lat0 = 90, lat1 = -90, lon0 = 200, lon1 = 0, any = false;
+    for (var a = 0; a < view.subCentroids.length; a++) {
+      if (!hot[this.areaPref[a]]) continue;
+      var c = view.subCentroids[a];
+      if (c[0] < lat0) lat0 = c[0];
+      if (c[0] > lat1) lat1 = c[0];
+      if (c[1] < lon0) lon0 = c[1];
+      if (c[1] > lon1) lon1 = c[1];
+      any = true;
+    }
+    if (!any) {
+      var sc = this.current ? this.current.source : null;
+      if (!sc) return;
+      lat0 = lat1 = sc.lat; lon0 = lon1 = sc.lon;
+    }
+    // まわりに余白をつけ、画面の縦横比にそろえる
+    var padLat = Math.max((lat1 - lat0) * 0.22, 0.8);
+    lat0 -= padLat; lat1 += padLat;
+    lon0 -= padLat * 1.15; lon1 += padLat * 1.15;
+    var midLat = (lat0 + lat1) / 2, kx = Math.cos(midLat * Math.PI / 180);
+    var spanY = lat1 - lat0, spanX = (lon1 - lon0) * kx;
+    if (spanX / spanY > w / h) {
+      var needY = spanX * h / w;
+      lat0 -= (needY - spanY) / 2; lat1 += (needY - spanY) / 2;
+    } else {
+      var needX = spanY * w / h;
+      var dx = (needX - spanX) / 2 / kx;
+      lon0 -= dx; lon1 += dx;
+    }
+    var sx = w / (lon1 - lon0), sy = h / (lat1 - lat0);
+
+    var LAND = '#c9ced6', LAND_EDGE = '#7d8794';
+    var groups = { land: [], hot: [], flash: [] };
+    for (a = 0; a < view.subRings.length; a++) {
+      var rings = view.subRings[a];
+      if (!rings) continue;
+      var pn = this.areaPref[a];
+      var path = new Path2D(), ok = false;
+      for (var r = 0; r < rings.length; r++) {
+        var ring = rings[r], n = ring.length >> 1;
+        if (n < 3) continue;
+        path.moveTo((ring[0] - lon0) * sx, (lat1 - ring[1]) * sy);
+        for (var q = 1; q < n; q++) {
+          path.lineTo((ring[q * 2] - lon0) * sx, (lat1 - ring[q * 2 + 1]) * sy);
+        }
+        path.closePath();
+        ok = true;
+      }
+      if (!ok) continue;
+      groups[flash[pn] ? 'flash' : (hot[pn] ? 'hot' : 'land')].push(path);
+    }
+    var order = ['land', 'hot', 'flash'];
+    var color = { land: LAND, hot: '#e8231c', flash: '#ffe14d' };
+    for (var g = 0; g < order.length; g++) {
+      var list = groups[order[g]];
+      ctx.fillStyle = color[order[g]];
+      for (i = 0; i < list.length; i++) ctx.fill(list[i], 'evenodd');
+    }
+    ctx.lineWidth = 0.6;
+    ctx.strokeStyle = LAND_EDGE;
+    for (i = 0; i < groups.land.length; i++) ctx.stroke(groups.land[i]);
+  };
+
+  /* ---------------- エリアメール ----------------
+   * メディアモードで「エリアメールを発信する」を入れているとき、警報の
+   * 第 1 報でスマートフォンに届く緊急速報メールを模したものを出す。 */
+  App.maybeAreaMail = function (report) {
+    if (this.mode !== 'media' || !this.areaMailOn) return;
+    if (this.areaMailShown || report.kind !== '警報') return;
+    this.areaMailShown = true;
+    P.showAreaMail(report.region);
+    this.sound.areaMail();
+  };
+
+
 
   /* ---------------- 入力 ---------------- */
   App.bind = function () {
     var self = this, canvas = this.view.canvas;
 
     el('mode-visual').addEventListener('click', function () { self.setMode('visual'); });
+    el('mode-media').addEventListener('click', function () { self.setMode('media'); });
     el('mode-config').addEventListener('click', function () { self.setMode('config'); });
+    el('cfg-areamail').addEventListener('change', function () { self.areaMailOn = this.checked; });
+    el('am-ok').addEventListener('click', function () {
+      P.hideAreaMail();
+      self.sound.stopAreaMail();
+    });
     el('rail-config').addEventListener('click', function () {
       self.setMode(self.mode === 'config' ? 'visual' : 'config');
     });

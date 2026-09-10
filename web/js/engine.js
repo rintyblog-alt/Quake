@@ -143,7 +143,7 @@
    * のあたりで最も大きく、700 km を越えると無くなる。またマグニチュードが
    * 小さいほど断層が点に近く波形も単純なので、差は小さくなる。
    * (M7.3 以上で頭打ち、M6 で 4 割、M5 で 2 割) */
-  var SYNTH_AMP = 0.80;        // 差の最大値 [計測震度]
+  var SYNTH_AMP = 0.95;        // 差の最大値 [計測震度]
   var SYNTH_FLOOR = 0.60;      // 震源直上に残る割合
   var SYNTH_RISE_KM = 130.0;   // 近距離で差が小さくなる長さ
   var SYNTH_FAR_KM = 660.0;    // 差が消えはじめる距離
@@ -352,6 +352,33 @@
     };
   }
 
+  /* ---------------- 緊急地震速報の推定の育ち方 ----------------
+   * 気象庁の EEW は、その時点までに届いた P 波だけを見て規模を決める。
+   * 断層の破壊はまだ続いているので、大きな地震ほど最初は過小評価になる。
+   * 2011 年三陸沖 (M9.0) の第 1 報は M4.3、最終報でも M8.1 だった。
+   *
+   * 破壊継続時間は T ≒ 10^(0.5M - 2.9) 秒なので、τ 秒ぶんの P 波で測れる
+   * 上限は M ≒ 5.8 + 2*log10(τ) になる。これに、手法そのものの頭打ち
+   * (振幅が飽和して M8 あたりから伸びない) を重ねる。 */
+  var EEW_WINDOW_C = 5.8;        // τ=1 秒で測れる M
+  var EEW_WINDOW_SLOPE = 2.0;    // τ が 10 倍で M が +2.0
+  var EEW_SAT_M = 7.5;           // ここから飽和が始まる
+  var EEW_SAT_SLOPE = 0.30;      // 飽和したあとの伸び
+
+  function eewWindowMag(tau) {
+    return EEW_WINDOW_C + EEW_WINDOW_SLOPE * Math.log(Math.max(tau, 0.6)) / Math.LN10;
+  }
+
+  function eewSaturation(mag) {
+    return mag <= EEW_SAT_M ? mag : EEW_SAT_M + EEW_SAT_SLOPE * (mag - EEW_SAT_M);
+  }
+
+  /* 最終報までの長さ。破壊が終わり、警戒した範囲に S 波が回りきるまで出し続ける。 */
+  function eewFinalSpan(mag, ruptureSeconds) {
+    var s = 20 + 3.5 * ruptureSeconds + 6 * Math.max(0, mag - 5);
+    return Math.min(160, Math.max(25, s));
+  }
+
   Engine.prototype.eewReports = function (field, src) {
     var st = this.stations;
     var n = field.tp.length;
@@ -366,8 +393,8 @@
     // 震央の真下に陸の観測点がある直下型は 2 点検知ですぐ出すが、それ以外は
     // 揺れが広がって点数がそろうのを待つ。待つ点数と上乗せの遅れは震源ごとに
     // 揺らがせる (同じ震源なら毎回同じになるように種から決める)。
-    var nearest = Infinity;
     var sea = st.seafloor;
+    var nearest = Infinity;
     for (i = 0; i < n; i++) {
       if (sea && sea[i]) continue;
       var dd = global.Util.haversine(src.lat, src.lon, st.lat[i], st.lon[i]);
@@ -379,20 +406,34 @@
     var extra = direct ? 0.1 + rnd() * 0.6 : 0.8 + rnd() * 2.7;
     need = Math.min(Math.max(need, 2), idx.length);
 
-    var reports = [];
-    var t = field.tp[idx[need - 1]] + 1.0 + extra;
     // 最大震度は陸上の観測点だけで測る (海底地震計は震央の真上にあるので、
     // 混ぜると沖合の地震ほど最大震度が実際より大きく出てしまう)
-    var sea = this.stations.seafloor;
     var trueMax = -3;
     for (i = 0; i < n; i++) {
       if (sea && sea[i]) continue;
       if (field.intensity[i] > trueMax) trueMax = field.intensity[i];
     }
 
+    // 破壊が始まってから最初の P 波が観測点に届くまで。これを引いた分だけが
+    // 「その時点までに見えている破壊の長さ」になる。
+    var firstArrival = field.tp[idx[0]];
+    var rupture = field.dim ? field.dim.length / (0.72 * 3.4) * 0.6 + 2 : 4;
+    var satCap = eewSaturation(src.magnitude);
+
+    // 震源の初期誤差。方向は震源ごとに決まった向きで、報を重ねるごとに縮む。
+    var errKm = direct ? 5 + rnd() * 9 : 15 + rnd() * 20;
+    var errDir = rnd() * Math.PI * 2;
+    var depthGuess = direct ? 10 : 10;   // 気象庁も初期は深さ 10km から始める
+
+    var reports = [];
+    var t = firstArrival + (field.tp[idx[need - 1]] - firstArrival) + 1.0 + extra;
     var num = 0;
-    var maxReports = 12;
+    var maxReports = 20;
     var giveUp = t + 45.0;          // ここまでに条件を満たさなければ発表しない
+    var finalSpan = eewFinalSpan(src.magnitude, rupture);
+    var finalAt = 0;
+    var prevMag = null, prevShindo = '', stable = 0;
+
     while (num < maxReports) {
       if (!reports.length && t > giveUp) break;   // 小さい地震は結局発表しない
       // 発表時点で検知済みの観測点数
@@ -400,18 +441,27 @@
       for (i = 0; i < idx.length; i++) { if (field.tp[idx[i]] <= t - 1.0) used++; else break; }
       if (used < 2) { t += 1.0; continue; }
 
-      // 推定は観測点が増えるほど真値に収束する
-      var conv = 1 - Math.exp(-used / 12);
-      var noiseM = (1 - conv) * 0.9 * Math.sin(num * 2.399 + 1.1);
-      var mag = src.magnitude - (1 - conv) * 0.8 + noiseM;
-      mag = Math.max(3, Math.min(9.5, mag));
+      // 見えている破壊の長さ [s] と、そこから決まる測れる規模の上限
+      var tau = Math.max(t - firstArrival, 0.6);
+      var mag = Math.min(src.magnitude, satCap, eewWindowMag(tau));
+      // 観測点が少ないうちは、そこからさらに低めに出る
+      var conv = 1 - Math.exp(-used / 10);
+      mag -= (1 - conv) * 0.55;
+      mag += (1 - conv) * 0.30 * Math.sin(num * 2.399 + 1.1);   // 報ごとの揺れ
+      mag = Math.max(2.5, Math.min(9.5, mag));
       // 震度が届かなくても、この規模なら発表する
       if (!reports.length && mag < 3.5) { t += 1.0; continue; }
 
-      var noiseP = (1 - conv) * 0.35;
-      var lat = src.lat + noiseP * Math.sin(num * 1.7);
-      var lon = src.lon + noiseP * Math.cos(num * 2.3);
-      var depth = Math.max(2, src.depth * (1 + (1 - conv) * 0.5 * Math.sin(num * 3.1)));
+      // 震源の推定。誤差は報を重ねるごとに縮んでいく。第 1 報は 15〜35 km
+      // ずれていることもあり、震央地名も途中で書き換わる。
+      var shrink = 1 / (1 + num * 0.55);
+      var off = errKm * shrink;
+      var wobble = 0.35 * shrink * Math.sin(num * 1.7 + 0.6);
+      var lat = src.lat + (off * Math.cos(errDir) / 111.32) + wobble * 0.4;
+      var lon = src.lon + (off * Math.sin(errDir) /
+                           (111.32 * Math.cos(src.lat * Math.PI / 180))) + wobble * 0.4;
+      var depth = depthGuess + (src.depth - depthGuess) * conv;
+      depth = Math.max(2, depth * (1 + 0.25 * shrink * Math.sin(num * 3.1)));
 
       // 推定 M での予測最大震度
       var predicted = trueMax + 1.72 * 0.58 * (mag - src.magnitude);
@@ -419,6 +469,8 @@
       // 予測最大震度が震度 3 に届かないうちは発表しない (気象庁と同じ)
       if (!reports.length && predicted < 2.5) { t += 1.0; continue; }
       var kind = predicted >= 4.5 ? '警報' : '予報';
+
+      if (!reports.length) finalAt = t + finalSpan;
 
       num++;
       reports.push({
@@ -437,8 +489,17 @@
         warningRegions: kind === '警報' ? this.warningRegions(field, predicted) : []
       });
 
-      if (num >= 6 && conv > 0.93) break;
-      t += num >= 5 ? 2.0 : 1.0;
+      if (t >= finalAt) break;
+      // 推定が動かなくなったら、ある程度の時間が過ぎたところで打ち切る。
+      // 早く止めすぎると最終報が地震の途中で出てしまうので、最終報までの
+      // 長さの半分近くは必ず出し続ける。
+      var mr = reports[num - 1];
+      if (prevMag !== null && Math.abs(mr.magnitude - prevMag) < 0.05 &&
+          mr.maxShindo === prevShindo) stable++; else stable = 0;
+      prevMag = mr.magnitude; prevShindo = mr.maxShindo;
+      if (stable >= 4 && num >= 6 && t - reports[0].issuedAt >= finalSpan * 0.45) break;
+      // 発表間隔は最初の数報が 1 秒、その後じわじわ広がる
+      t += Math.min(12, 1.0 + Math.max(0, num - 4) * 1.1);
     }
     if (reports.length) reports[reports.length - 1].isFinal = true;
     return reports;
