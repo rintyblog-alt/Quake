@@ -805,8 +805,8 @@
       var r = eew[this.firedReports];
       var first = this.firedReports === 0;
       if (this.mode === 'media') {
-        // テレビの緊急地震速報。音源を最初から最後まで、第 1 報は 2 回、
-        // 続報は 1 回鳴らす。
+        // テレビの緊急地震速報。音源を最初から最後まで、最初の警報で 2 回、
+        // そのあとの続報は 1 回鳴らす。
         //
         // ただし続報は 1〜2 秒おきに出るので、報が来るたびに鳴らすと音が
         // 途切れなくなる。発表の内容が変わった報だけで鳴らし、まだ鳴って
@@ -814,10 +814,15 @@
         // 音源そのものにアナウンスが入っているので合成音声は重ねない。
         // 比べる相手は「前の報」ではなく「最後に鳴らした報」。鳴っている
         // あいだに上がった段を取りこぼさないようにする。
-        if (first) {
-          if (this.sound.mediaChime(2)) this.lastChimed = r;
-        } else if (worthChiming(this.lastChimed, r) && this.sound.mediaChime(1)) {
-          this.lastChimed = r;
+        //
+        // 流すのは警報のときだけ。予報 (予想最大震度が 5弱 に届かないもの)
+        // ではテロップも音も出さない。
+        if (r.kind === '警報') {
+          if (!this.lastChimed) {
+            if (this.sound.mediaChime(2)) this.lastChimed = r;
+          } else if (worthChiming(this.lastChimed, r) && this.sound.mediaChime(1)) {
+            this.lastChimed = r;
+          }
         }
       } else if (first) {
         // 検知の演出から緊急地震速報の画面へ移る
@@ -832,8 +837,7 @@
       this.eewReport = r;
       this.updatePrediction(r);
       P.showEEW(r, cur.originDate);
-      this.showMediaEEW(r);
-      this.maybeAreaMail(r);
+      if (r.kind === '警報') { this.showMediaEEW(r); this.maybeAreaMail(r); }
       this.firedReports++;
     }
 
@@ -1015,7 +1019,9 @@
         // 緊急地震速報が出ていれば、予想震度を区域ごとに塗る
         if (this.predictedArea) v.drawPredictedSubdivisions(this.predictedArea);
         if (cur.tsunami && this.firedTsunami) v.drawTsunami(cur.tsunami, this.t);
-        if (this.t > 0) {
+        // P/S 波の輪は緊急地震速報を出してから。微弱な反応だけの段階では
+        // いちいち出さない。
+        if (this.t > 0 && this.firedReports > 0) {
           v.drawWavefronts(cur.source.lat, cur.source.lon,
                            this.waveRadius('P', cur.source.depth, this.t),
                            this.waveRadius('S', cur.source.depth, this.t));
@@ -1250,7 +1256,8 @@
     this.view.canvas.classList.toggle('picking', mode === 'config');
     // メディアモードは左のパネルを伏せて、テレビのテロップだけを出す
     document.body.classList.toggle('media', mode === 'media');
-    el('media-eew').classList.toggle('hidden', mode !== 'media' || !this.eewReport);
+    el('media-eew').classList.toggle(
+      'hidden', mode !== 'media' || !this.eewReport || this.eewReport.kind !== '警報');
     if (mode !== 'media') P.hideAreaMail();
     this.view.resize();
     if (mode === 'config') { this.updateConfigPreview(); this.renderScenarioList(); }
@@ -1273,7 +1280,7 @@
 
   /* 地域名と地図は毎フレーム更新する (点滅させるため) */
   App.updateMediaEEW = function () {
-    if (!this.eewReport) return;
+    if (!this.eewReport || this.eewReport.kind !== '警報') return;
     // 地震情報が出たらテロップは引っ込める
     if (this.phase === 'final') { el('media-eew').classList.add('hidden'); return; }
     el('media-eew').classList.remove('hidden');

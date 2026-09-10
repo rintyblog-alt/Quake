@@ -21,6 +21,7 @@ from .eew import TRIGGER_GAL, EEWSimulator
 from .geo import haversine_array
 from .gmpe import (
     arv_from_avs30,
+    far_field_correction,
     long_range_correction,
     magnitude_distance_correction,
     slab_path_bonus,
@@ -103,6 +104,7 @@ def gmpe_intensity(
     out = np.asarray(intensity_from_pgv(pgv), dtype=float)
     out = out + magnitude_distance_correction(mag, r)
     out = out + slab_path_bonus(depth, r, stations.lat, stations.lon)
+    out = out + far_field_correction(r, depth, stations.lat, stations.lon)
     if residual is not None:
         out = out + residual
     return out
@@ -219,7 +221,10 @@ def run(config: ScenarioConfig, data_dir: Path | None = None, verbose: bool = Tr
         stations.lat, stations.lon, seed=config.seed + 977, median_intensity=median_est
     )
     # 波形の振幅には、ばらつき・異常震域・遠方の補正をまとめて反映させる
-    gain = variability.acceleration_gain(resid + slab + long_range_correction(arr["r_min"]))
+    far_corr = far_field_correction(
+        arr["r_min"], config.depth_km, stations.lat, stations.lon)
+    gain = variability.acceleration_gain(
+        resid + slab + long_range_correction(arr["r_min"]) + far_corr)
     # 余震には経路の項を引き直さず、観測点固有の項だけを使う
     site_resid = variability.PHI_SITE * variability.site_terms(stations.lat, stations.lon)
 
@@ -291,6 +296,8 @@ def run(config: ScenarioConfig, data_dir: Path | None = None, verbose: bool = Tr
         pga_far = si_midorikawa_pga(config.magnitude, r_far, config.depth_km, config.kind) * amp_far
         i_far = (np.asarray(intensity_from_pgv(pgv_far), dtype=float)
                  + magnitude_distance_correction(config.magnitude, r_far)
+                 + far_field_correction(r_far, config.depth_km,
+                                        stations.lat[far], stations.lon[far])
                  + slab[far] + resid[far])
         # 打ち切り距離のところで値が飛ぶと、地図に不自然な円の縁ができる。
         # 内側の帯 (波形合成) と外側の帯 (距離減衰式) の中央値を合わせておく。

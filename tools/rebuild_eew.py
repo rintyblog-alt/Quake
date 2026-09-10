@@ -33,6 +33,8 @@ EEW_SAT_SLOPE = 0.30
 DIRECT_HIT_KM = 35.0
 WARNING_INTENSITY = 4.5
 FORECAST_MIN_INTENSITY = 2.5
+FORECAST_WEAK_INTENSITY = 0.5
+FORECAST_WIDE_STATIONS = 400
 FORECAST_MIN_MAGNITUDE = 3.5
 GIVEUP_S = 45.0
 MAX_REPORTS = 20
@@ -170,17 +172,21 @@ def rebuild(path: Path, stations: dict, regions: Regions) -> int:
         dep = depth_guess + (src["depth"] - depth_guess) * conv
         dep = max(2.0, dep * (1 + 0.25 * shrink * math.sin(num * 3.1)))
 
-        predicted = round_intensity(true_max + 1.72 * 0.58 * (mag - src["magnitude"]))
+        shift = 1.72 * 0.58 * (mag - src["magnitude"])
+        predicted = round_intensity(true_max + shift)
         if not reports and predicted < FORECAST_MIN_INTENSITY:
-            t += 1.0
-            continue
+            # 震度 1 以上が広い範囲に及ぶなら、震度 3 に届かなくても発表する
+            felt = int(np.count_nonzero(
+                (final + shift >= FORECAST_WEAK_INTENSITY) & ~sea))
+            if predicted < FORECAST_WEAK_INTENSITY or felt < FORECAST_WIDE_STATIONS:
+                t += 1.0
+                continue
         kind = "警報" if predicted >= WARNING_INTENSITY else "予報"
         if not reports:
             final_at = t + span
 
         warn = []
         if kind == "警報":
-            shift = 1.72 * 0.58 * (mag - src["magnitude"])
             hot = np.nonzero((final + shift >= WARNING_INTENSITY) & ~sea)[0]
             for i in hot[np.argsort(-final[hot])]:
                 nm = regions.by_code.get(regions.station_region[int(i)])

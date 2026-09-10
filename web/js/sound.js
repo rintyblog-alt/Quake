@@ -628,6 +628,20 @@
     return Math.min(95, Math.max(30, Math.round(Number(m) * 10)));
   }
 
+  /* 深さ 10km 未満は数字を言わず「ごく浅い」とする (気象庁と同じ)。
+   * 深さの読みと、そのあとの「キロメートル。…」までをまとめて差し替える。 */
+  var SHALLOW_DEPTH_KM = 10;
+
+  function depthClips(km) {
+    if (!(Number(km) >= SHALLOW_DEPTH_KM)) return ['info_depth_shallow'];
+    return ['depth_' + nearestDepth(Number(km)), 'info_km'];
+  }
+
+  function depthText(km) {
+    if (!(Number(km) >= SHALLOW_DEPTH_KM)) return 'ごく浅い。';
+    return Math.round(km) + 'キロメートル。';
+  }
+
   function nearestDepth(km) {
     var best = DEPTHS[0];
     for (var i = 1; i < DEPTHS.length; i++) {
@@ -683,8 +697,8 @@
                SHINDO_CLIP[info.shindo], 'info_observed',
                info.tsunami ? 'info_tsunami_now' : 'info_no_tsunami',
                'info_hypo_lead', this.regionClip(info.region), PAUSE,
-               'info_depth_lead', 'depth_' + nearestDepth(Number(info.depth)), 'info_km',
-               'mag_' + magClip(info.magnitude), 'info_mag_tail'];
+               'info_depth_lead'].concat(depthClips(info.depth), [
+               'mag_' + magClip(info.magnitude), 'info_mag_tail']);
     if (this.playSequence(seq)) return;
 
     var d = info.time || new Date();
@@ -693,8 +707,8 @@
                info.shindo + 'を観測する地震がありました。' +
                (info.tsunami ? '現在、津波予報等を発表中です。'
                              : 'この地震による津波の心配はありません。') +
-               '震源地は、' + info.region + '。深さ' + Math.round(info.depth) +
-               'キロメートル。地震の規模を示すマグニチュードは、' +
+               '震源地は、' + info.region + '。深さ' + depthText(info.depth) +
+               '地震の規模を示すマグニチュードは、' +
                Number(info.magnitude).toFixed(1) + 'と、推定されています。');
   };
 
@@ -780,10 +794,10 @@
 
     if (forecast.maxLevel >= 2 && source) {
       // #3 震源に関する情報
-      seq.push('hypo_lead', this.regionClip(source.region), PAUSE,
-               'info_depth_lead', 'depth_' + nearestDepth(Number(source.depth)), 'info_km',
+      seq.push('hypo_lead', this.regionClip(source.region), PAUSE, 'info_depth_lead');
+      seq = seq.concat(depthClips(source.depth), [
                'mag_' + magClip(source.magnitude), 'info_mag_tail',
-               'tsu_now_lead', TSU_KIND_CLIP[forecast.maxLevel], 'tsu_now_tail');
+               'tsu_now_lead', TSU_KIND_CLIP[forecast.maxLevel], 'tsu_now_tail']);
     } else if (forecast.maxLevel === 1) {
       seq.push('tsu_leave_sea');
     }

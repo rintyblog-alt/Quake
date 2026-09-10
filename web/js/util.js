@@ -240,8 +240,10 @@
     return m + '分' + (s ? s + '秒' : '');
   }
   function formatMagnitude(m) { return 'M' + Number(m).toFixed(1); }
+  /* 深さの表記。気象庁と同じで、10km に満たないものは数字を出さず
+   * 「ごく浅い」とする (10km ちょうどは 10km と出す)。 */
   function formatDepth(km) {
-    if (km <= 10) return 'ごく浅い〜' + Math.round(km) + 'km';
+    if (km < 10) return 'ごく浅い';
     return Math.round(km) + 'km';
   }
 

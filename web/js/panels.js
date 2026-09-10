@@ -7,6 +7,13 @@
 
   var Panels = {};
 
+  /* 深さの欄。「ごく浅い」のときは数字より字数が多いので少し小さくする。 */
+  function setDepth(id, km) {
+    var box = el(id), text = U.formatDepth(km);
+    box.textContent = text;
+    box.classList.toggle('as-text', /[^0-9km]/.test(text));
+  }
+
   /* 規模・深さのバーの色 (震度と同じ配色をそのまま使う) */
   function magnitudeColor(m) {
     if (m >= 8.0) return U.shindoColor('6強');
@@ -62,7 +69,7 @@
 
     el('eew-magnitude').textContent = Number(report.magnitude).toFixed(1);
     el('meter-mag-bar').style.background = magnitudeColor(report.magnitude);
-    el('eew-depth').textContent = Math.round(report.depth) + 'km';
+    setDepth('eew-depth', report.depth);
     el('meter-depth-bar').style.background = depthColor(report.depth);
 
     el('eew-message').innerHTML = warn
@@ -197,7 +204,8 @@
     el('final-magnitude').textContent = hasHypo ? Number(info.magnitude).toFixed(1) : '--';
     el('final-mag-bar').style.background =
       hasHypo ? magnitudeColor(info.magnitude) : 'var(--panel-3)';
-    el('final-depth').textContent = hasHypo ? Math.round(info.depth) + 'km' : '--';
+    if (hasHypo) setDepth('final-depth', info.depth);
+    else { el('final-depth').textContent = '--'; el('final-depth').classList.remove('as-text'); }
     el('final-depth-bar').style.background =
       hasHypo ? depthColor(info.depth) : 'var(--panel-3)';
 
@@ -235,7 +243,7 @@
       r.textContent = q.region;
       var sub = document.createElement('div');
       sub.className = 'rl-sub';
-      sub.textContent = U.formatMagnitude(q.magnitude) + ' / ' + Math.round(q.depth) + 'km' +
+      sub.textContent = U.formatMagnitude(q.magnitude) + ' / ' + U.formatDepth(q.depth) +
                         (q.time ? ' / ' + U.formatHM(q.time) : '');
       main.appendChild(r); main.appendChild(sub);
       var play = document.createElement('div');

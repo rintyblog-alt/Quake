@@ -74,6 +74,18 @@ _CORR_NEAR = (-0.50, 0.50, -0.50, 0.35)   # 同上 (基準 M4.5)
 _LONG_REF_KM = 400.0
 _LONG_AMP = 0.55
 
+# 300km を越えたあたりからの減り方。
+#
+# 司・翠川の -0.002*X という減衰項は遠方で弱すぎる。遠方では Lg 波の
+# 広がり方が変わり、地殻内の散乱でも失われるためで、そのままだと遠くが
+# 軒並み高く出る。2011 年三陸沖 (M9.0) の都道府県別最大震度 47 件と
+# 突き合わせると 450km より遠くで 0.9〜1.6 も高く、九州が震度3、
+# 中国四国が震度4 になってしまっていた (実際は九州 1、中国四国 2)。
+# 47 件を最小二乗であてはめて決めた。
+_FAR_AMP = 1.75
+_FAR_START_KM = 225.0
+_FAR_LENGTH_KM = 250.0
+
 
 def long_range_correction(distance_km) -> np.ndarray:
     """遠方の計測震度に足す補正 (負の値)。"""
@@ -154,6 +166,25 @@ def slab_path_bonus(depth_km: float, distance_km, lat, lon) -> np.ndarray:
     # 0.002 は log10(PGV) に対する係数、1.72 は震度への換算係数
     bonus = 1.72 * 0.002 * x * SLAB_Q_RECOVERY * deep * fore_arc_weight(lat, lon)
     return np.minimum(bonus, SLAB_MAX_BONUS)
+
+
+def far_field_correction(distance_km, depth_km: float = 0.0,
+                        lat=None, lon=None) -> np.ndarray:
+    """225km より遠くの計測震度に足す補正 (負の値)。
+
+    これは浅い地震 (2011 年三陸沖) に合わせて決めたもので、地殻を通って
+    きた波が散乱で失う分を表している。深発地震はスラブの中をほとんど
+    減らずに伝わるので掛けない (異常震域を潰さないため)。
+    """
+    r = np.asarray(distance_km, dtype=float)
+    over = np.maximum(r - _FAR_START_KM, 0.0)
+    base = -_FAR_AMP * (1.0 - np.exp(-over / _FAR_LENGTH_KM))
+    if depth_km > SLAB_MIN_DEPTH_KM:
+        deep = np.clip(
+            (depth_km - SLAB_MIN_DEPTH_KM) / (SLAB_FULL_DEPTH_KM - SLAB_MIN_DEPTH_KM), 0.0, 1.0
+        )
+        base = base * (1.0 - deep)
+    return base
 
 
 def arv_from_avs30(avs30) -> np.ndarray:

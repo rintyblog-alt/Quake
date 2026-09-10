@@ -158,6 +158,19 @@
     return -SYNTH_AMP * rise * taper * size;
   }
 
+  /* ---------------- 遠方の減り方 ----------------
+   * 司・翠川の -0.002*X という減衰項は、300km を越えたあたりから実際より
+   * 弱すぎる。遠方では Lg 波の広がり方が変わり、地殻内の散乱でも失われる
+   * ためで、そのままだと遠くが軒並み高く出る。
+   *
+   * 2011 年三陸沖 (M9.0) の都道府県別最大震度 47 件と突き合わせると、
+   * 450km より遠くで 0.9〜1.6 も高かった (九州が震度3、中国四国が震度4に
+   * なってしまう。実際は九州 1、中国四国 2)。47 件を最小二乗であてはめて
+   * 決めた項を引く。近距離 (275km 以内) には掛からない。 */
+  var FAR_AMP = 1.75;        // 十分遠方での引き算 [計測震度]
+  var FAR_START_KM = 225.0;  // ここから効きはじめる
+  var FAR_LENGTH_KM = 250.0; // 効き方の長さ
+
   /* ---------------- 深発地震の異常震域 ----------------
    * 沈み込む海洋プレートは冷たく Q が高いため、スラブ内を伝わった波は
    * ほとんど減衰しない。一方、背弧側へ向かう波は高温のマントルウェッジ
@@ -191,6 +204,21 @@
   function foreArcWeight(lat, lon) {
     var east = (lon - frontLon(lat)) * 111.32 * Math.cos(lat * Math.PI / 180);
     return 0.5 + 0.5 * Math.tanh(east / SLAB_WIDTH_KM);
+  }
+
+  /* 遠方の減り方の補正 (上の FAR_* を参照)。
+   *
+   * これは浅い地震 (2011 年三陸沖) に合わせて決めたもので、地殻を通って
+   * きた波が散乱で失う分を表している。深発地震はスラブの中をほとんど
+   * 減らずに伝わるので掛けない (異常震域を潰さないため)。 */
+  function farFieldCorrection(r, depth) {
+    if (r <= FAR_START_KM) return 0;
+    var base = -FAR_AMP * (1 - Math.exp(-(r - FAR_START_KM) / FAR_LENGTH_KM));
+    if (depth > SLAB_MIN_DEPTH) {
+      var deep = Math.min(1, (depth - SLAB_MIN_DEPTH) / (SLAB_FULL_DEPTH - SLAB_MIN_DEPTH));
+      base *= 1 - deep;
+    }
+    return base;
   }
 
   function slabBonus(depth, r, lat, lon) {
@@ -292,6 +320,7 @@
       var median = 2.68 + 1.72 * Math.log10(Math.max(pgv, 1e-6))
                  + gmpeCorrection(src.magnitude, r)
                  + synthesisCorrection(src.magnitude, r)
+                 + farFieldCorrection(r, src.depth)
                  + slabBonus(src.depth, r, st.lat[i], st.lon[i]);
       inten[i] = median + (resid ? resid[i] * sigmaScale(median) : 0);
 
@@ -379,6 +408,25 @@
     return Math.min(160, Math.max(25, s));
   }
 
+  /* 発表の条件 (気象庁の規則に、広がりの条件を足したもの)
+   *
+   * 予想最大震度が 3 に届かない地震でも、震度 1〜2 が広い範囲に及ぶなら
+   * 発表する。震源が遠い沖合の地震や深い地震がこれにあたる。逆に、ごく
+   * 狭い範囲だけがわずかに揺れる地震は検知だけで終わらせる。 */
+  var FORECAST_MIN_INTENSITY = 2.5;    // 震度 3 以上ならこれだけで発表
+  var FORECAST_WEAK_INTENSITY = 0.5;   // 震度 1 以上あって…
+  var FORECAST_WIDE_STATIONS = 400;    // …これだけの観測点に広がるなら発表
+
+  /* 降順に並んだ配列で、しきい値以上の個数を返す */
+  function countAtLeast(sorted, threshold) {
+    var lo = 0, hi = sorted.length;
+    while (lo < hi) {
+      var mid = (lo + hi) >> 1;
+      if (sorted[mid] >= threshold) lo = mid + 1; else hi = mid;
+    }
+    return lo;
+  }
+
   Engine.prototype.eewReports = function (field, src) {
     var st = this.stations;
     var n = field.tp.length;
@@ -413,6 +461,11 @@
       if (sea && sea[i]) continue;
       if (field.intensity[i] > trueMax) trueMax = field.intensity[i];
     }
+
+    // 揺れの広がりを数えるために、陸上の震度を降順に並べておく
+    var landSorted = [];
+    for (i = 0; i < n; i++) if (!(sea && sea[i])) landSorted.push(field.intensity[i]);
+    landSorted.sort(function (a, b) { return b - a; });
 
     // 破壊が始まってから最初の P 波が観測点に届くまで。これを引いた分だけが
     // 「その時点までに見えている破壊の長さ」になる。
@@ -464,10 +517,15 @@
       depth = Math.max(2, depth * (1 + 0.25 * shrink * Math.sin(num * 3.1)));
 
       // 推定 M での予測最大震度
-      var predicted = trueMax + 1.72 * 0.58 * (mag - src.magnitude);
-      predicted = global.Util.roundIntensity(predicted);
-      // 予測最大震度が震度 3 に届かないうちは発表しない (気象庁と同じ)
-      if (!reports.length && predicted < 2.5) { t += 1.0; continue; }
+      var shift = 1.72 * 0.58 * (mag - src.magnitude);
+      var predicted = global.Util.roundIntensity(trueMax + shift);
+      if (!reports.length && predicted < FORECAST_MIN_INTENSITY) {
+        // 震度 3 に届かなくても、震度 1 以上が広い範囲に及ぶなら発表する
+        var felt = countAtLeast(landSorted, FORECAST_WEAK_INTENSITY - shift);
+        if (predicted < FORECAST_WEAK_INTENSITY || felt < FORECAST_WIDE_STATIONS) {
+          t += 1.0; continue;
+        }
+      }
       var kind = predicted >= 4.5 ? '警報' : '予報';
 
       if (!reports.length) finalAt = t + finalSpan;
@@ -579,6 +637,7 @@
       var med = 2.68 + 1.72 * (logPgv + Math.log10(this.arv[i]))
               + gmpeCorrection(src.magnitude, r)
               + synthesisCorrection(src.magnitude, r)
+              + farFieldCorrection(r, src.depth)
               + slabBonus(src.depth, r, st.lat[i], st.lon[i]);
       var v = med + PHI_SITE * this.siteResid[i] * sigmaScale(med);
       if (v > best) best = v;

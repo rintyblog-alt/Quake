@@ -118,6 +118,11 @@ html, body {
   font-size: calc(var(--card-w) * .124); font-weight: 800; line-height: 1;
   margin-right: calc(var(--card-w) * .03);
 }
+/* 「ごく浅い」のように数字でないときは字数が多いので詰める */
+.meter-value.as-text {
+  font-family: inherit; font-size: calc(var(--card-w) * .098);
+  letter-spacing: -0.01em;
+}
 .meter-bar {
   width: calc(var(--card-w) * .082); height: calc(var(--card-w) * .182);
   border-radius: calc(var(--card-w) * .012); background: #2b2f36; flex: 0 0 auto;

@@ -86,6 +86,11 @@ WARNING_INTENSITY = 4.5  # 予測最大震度 5弱 以上で「警報」
 # 予測最大震度が震度 3 に届かないうちは発表しない (気象庁と同じ)。
 # 震度 0・1 しか出ない地震で緊急地震速報が鳴るのはおかしい。
 FORECAST_MIN_INTENSITY = 2.5
+# 震度 3 に届かなくても、震度 1〜2 が広い範囲に及ぶなら発表する。震源が遠い
+# 沖合の地震や深い地震がこれにあたる。逆に、ごく狭い範囲だけがわずかに揺れる
+# 地震は検知だけで終わらせる。
+FORECAST_WEAK_INTENSITY = 0.5    # 震度 1 以上あって…
+FORECAST_WIDE_STATIONS = 400     # …これだけの観測点に広がるなら発表
 FORECAST_MIN_MAGNITUDE = 3.5     # 震度が届かなくても、この規模なら発表する
 FORECAST_GIVEUP_S = 45.0         # ここまでに条件を満たさなければ発表しない
 FORECAST_INTENSITY = 2.5  # 予測最大震度 3 以上で「予報」
@@ -295,10 +300,16 @@ class EEWSimulator:
             inten = self.predict_intensity(la, lo, dep, mag, true_kind)
             max_i = round_intensity(float(np.max(inten)))
             if not reports and max_i < FORECAST_MIN_INTENSITY:
-                # 震度 3 に届かないうちは第 1 報を出さない。あとで推定が
-                # 上がってくれば、そこから発表を始める。
-                next_t += self.report_interval
-                continue
+                # 震度 3 に届かないうちは第 1 報を出さない。ただし震度 1 以上が
+                # 広い範囲に及ぶなら出す。あとで推定が上がってくれば、そこから
+                # 発表を始める。
+                felt = inten >= FORECAST_WEAK_INTENSITY
+                if self.land is not None:
+                    felt = felt & self.land
+                if (max_i < FORECAST_WEAK_INTENSITY
+                        or int(np.count_nonzero(felt)) < FORECAST_WIDE_STATIONS):
+                    next_t += self.report_interval
+                    continue
             kind = "警報" if max_i >= WARNING_INTENSITY else "予報"
 
             warn_regions: list[str] = []
