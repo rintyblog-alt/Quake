@@ -323,6 +323,8 @@
     this.warnPrefSince = {};   // 府県 -> 警報の対象になった時刻 (テロップの点滅に使う)
     this.lastChimed = null;
     this.saidPrefs = [];
+    if (this.scene3d) this.scene3d.reset();
+    if (this.mode === 'quake3d') { this.fillScene3DSites(); this.updateScene3DNote(); }
     this.areaMailShown = false;
     if (this.sound) this.sound.cancelSpeech();
     P.hideAreaMail();
@@ -723,6 +725,7 @@
       el('track').value = String(Math.round(this.t / this.current.dt));
       this.processEvents();
     }
+    if (this.mode === 'quake3d') this.drawScene3D(dtReal * this.speed);
     this.draw();
     var self = this;
     requestAnimationFrame(function (ts) { self.tick(ts); });
@@ -1252,7 +1255,7 @@
   App.setMode = function (mode) {
     this.mode = mode;
     if (mode !== 'config') this.lastViewMode = mode;
-    ['visual', 'media', 'config'].forEach(function (m) {
+    ['visual', 'media', 'quake3d', 'config'].forEach(function (m) {
       var b = el('mode-' + m);
       if (!b) return;
       b.classList.toggle('active', mode === m);
@@ -1263,6 +1266,10 @@
     this.view.canvas.classList.toggle('picking', mode === 'config');
     // メディアモードは左のパネルを伏せて、テレビのテロップだけを出す
     document.body.classList.toggle('media', mode === 'media');
+    // 体験モードは地図の上に 3D の画面をかぶせる
+    document.body.classList.toggle('quake3d', mode === 'quake3d');
+    el('scene3d').classList.toggle('hidden', mode !== 'quake3d');
+    if (mode === 'quake3d') this.initScene3D();
     el('media-eew').classList.toggle(
       'hidden', mode !== 'media' || !this.eewReport || this.eewReport.kind !== '警報');
     if (mode !== 'media') P.hideAreaMail();
@@ -1419,6 +1426,119 @@
     for (i = 0; i < fresh.length && i < 12; i++) said.push(fresh[i]);
   };
 
+  /* ---------------- 揺れ方の 3D 体験 ----------------
+   *
+   * 選んだ地点のリアルタイム震度をそのまま揺れの大きさに使い、部屋や街の
+   * 中から見た揺れ方を描く。震度の数字だけでは分からない「その場でどう
+   * 感じるか」を掴むためのもので、建物の被害を予測するものではない。 */
+  var SCENE_SITES = [
+    ['札幌', 43.06, 141.35], ['仙台', 38.27, 140.87], ['新潟', 37.92, 139.04],
+    ['東京', 35.69, 139.69], ['横浜', 35.44, 139.64], ['名古屋', 35.18, 136.91],
+    ['大阪', 34.69, 135.50], ['広島', 34.39, 132.46], ['高知', 33.56, 133.53],
+    ['福岡', 33.59, 130.40], ['那覇', 26.21, 127.68]
+  ];
+
+  App.initScene3D = function () {
+    var self = this;
+    if (!this.scene3d) {
+      if (!global.Scene3D) return;
+      this.scene3d = new global.Scene3D(el('scene3d-canvas'));
+      var sel = el('s3-scene');
+      this.scene3d.scenes().forEach(function (s3) {
+        var op = document.createElement('option');
+        op.value = s3.key; op.textContent = s3.name;
+        sel.appendChild(op);
+      });
+      sel.addEventListener('change', function () {
+        self.scene3d.setScene(this.value);
+        self.updateScene3DNote();
+      });
+      el('s3-site').addEventListener('change', function () {
+        self.scene3dSite = parseInt(this.value, 10);
+        self.updateScene3DNote();
+      });
+      el('s3-yaw').addEventListener('input', function () {
+        self.scene3d.yaw = self.scene3d.def.yaw + parseFloat(this.value) * Math.PI / 180;
+      });
+    }
+    this.fillScene3DSites();
+    this.updateScene3DNote();
+  };
+
+  /* 地点の一覧。いちばん強く揺れる場所を先頭に置く。 */
+  App.fillScene3DSites = function () {
+    var sel = el('s3-site'), cur = this.current;
+    if (!sel || !this.stations) return;
+    var items = [];
+    if (cur) {
+      var top = -3, ti = -1;
+      for (var i = 0; i < cur.final.length; i++) {
+        if (this.stations.seafloor[i]) continue;
+        if (cur.final[i] > top) { top = cur.final[i]; ti = i; }
+      }
+      if (ti >= 0) items.push({ index: ti, label: '最大震度の地点（' + this.stations.name[ti] + '）' });
+    }
+    for (var k = 0; k < SCENE_SITES.length; k++) {
+      var s3 = SCENE_SITES[k], best = -1, bd = 1e9;
+      for (i = 0; i < this.stations.count; i++) {
+        if (this.stations.seafloor[i]) continue;
+        var d = U.haversine(s3[1], s3[2], this.stations.lat[i], this.stations.lon[i]);
+        if (d < bd) { bd = d; best = i; }
+      }
+      if (best >= 0) items.push({ index: best, label: s3[0] });
+    }
+    var same = sel._items && sel._items.length === items.length &&
+               sel._items.every(function (x, j) { return x.index === items[j].index; });
+    if (!same) {
+      sel.innerHTML = '';
+      items.forEach(function (it) {
+        var op = document.createElement('option');
+        op.value = String(it.index); op.textContent = it.label;
+        sel.appendChild(op);
+      });
+      sel._items = items;
+      this.scene3dSite = items.length ? items[0].index : 0;
+      sel.value = String(this.scene3dSite);
+    }
+  };
+
+  App.updateScene3DNote = function () {
+    var cur = this.current, sc = this.scene3d;
+    if (!sc) return;
+    var note = sc.def.note;
+    if (cur && this.stations && this.scene3dSite != null) {
+      var i = this.scene3dSite;
+      var d = U.haversine(cur.source.lat, cur.source.lon,
+                          this.stations.lat[i], this.stations.lon[i]);
+      sc.setSource(cur.source.magnitude, d);
+      note += '　／　' + this.stations.name[i] + '　震央から ' + Math.round(d) + ' km' +
+              '　最大震度 ' + U.shindoClass(cur.final[i]);
+    }
+    note += '　／　揺れ方の感じを掴むためのもので、建物の被害を表すものではありません。';
+    el('s3-note').textContent = note;
+  };
+
+  /* 毎コマ呼ぶ。地図の描画の代わりにこちらを回す。 */
+  App.drawScene3D = function (dt) {
+    var sc = this.scene3d, cur = this.current;
+    if (!sc) return;
+    var v = -3;
+    if (cur && this.scene3dSite != null) {
+      var vals = cur.valuesAt(this.t);
+      v = vals[this.scene3dSite];
+    }
+    sc.update(this.t, v, Math.max(0.001, Math.min(dt || 0.016, 0.1)));
+    sc.draw();
+    var box = el('s3-shindo');
+    var cls = v > -2.9 ? U.shindoClass(v) : '-';
+    if (box._cls !== cls) {
+      box.innerHTML = v > -2.9 ? P.shindoHTML(cls) : '-';
+      box.style.background = v > -2.9 ? U.shindoColor(cls) : '#38465c';
+      box.style.color = v > -2.9 ? U.shindoTextColor(cls) : '#fff';
+      box._cls = cls;
+    }
+  };
+
   /* ---------------- エリアメール ----------------
    * メディアモードで「エリアメールを発信する」を入れているとき、警報の
    * 第 1 報でスマートフォンに届く緊急速報メールを模したものを出す。 */
@@ -1438,6 +1558,7 @@
 
     el('mode-visual').addEventListener('click', function () { self.setMode('visual'); });
     el('mode-media').addEventListener('click', function () { self.setMode('media'); });
+    el('mode-quake3d').addEventListener('click', function () { self.setMode('quake3d'); });
     el('mode-config').addEventListener('click', function () { self.setMode('config'); });
     el('cfg-areamail').addEventListener('change', function () { self.areaMailOn = this.checked; });
     el('am-ok').addEventListener('click', function () {

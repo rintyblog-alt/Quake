@@ -119,6 +119,7 @@
   <nav class="mode-switch" role="tablist" aria-label="モード切替">
     <button id="mode-visual" class="mode-btn active" role="tab" aria-selected="true">視覚</button>
     <button id="mode-media" class="mode-btn" role="tab" aria-selected="false">メディア</button>
+    <button id="mode-quake3d" class="mode-btn" role="tab" aria-selected="false">体験</button>
     <button id="mode-config" class="mode-btn" role="tab" aria-selected="false">設定</button>
   </nav>
 
@@ -218,6 +219,30 @@
     </div>
   </section>
 
+  <!-- ================= 揺れ方の 3D 体験 ================= -->
+  <div id="scene3d" class="scene3d hidden">
+    <canvas id="scene3d-canvas"></canvas>
+    <div class="s3-bar">
+      <div class="s3-group">
+        <span class="s3-label">場所</span>
+        <select id="s3-scene" class="s3-select"></select>
+      </div>
+      <div class="s3-group">
+        <span class="s3-label">地点</span>
+        <select id="s3-site" class="s3-select"></select>
+      </div>
+      <div class="s3-readout">
+        <span id="s3-shindo" class="s3-shindo">-</span>
+        <span class="s3-sub">その場の<br>リアルタイム震度</span>
+      </div>
+      <div class="s3-group s3-look">
+        <span class="s3-label">向き</span>
+        <input id="s3-yaw" class="s3-range" type="range" min="-180" max="180" value="0">
+      </div>
+    </div>
+    <p id="s3-note" class="s3-note">-</p>
+  </div>
+
   <!-- ================= メディアモード ================= -->
   <div id="media-eew" class="media-eew hidden">
     <div class="me-banner">
@@ -290,6 +315,7 @@
 <script src="js/projection.js"></script>
 <script src="js/mapview.js"></script>
 <script src="js/engine.js"></script>
+<script src="js/scene3d.js"></script>
 <script src="js/sound.js"></script>
 <script src="js/panels.js"></script>
 <script src="js/app.js"></script>
