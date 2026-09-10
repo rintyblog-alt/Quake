@@ -45,6 +45,16 @@ OUT_DIR = ROOT / "web" / "sounds" / "voice"
 SPEAKER_ID = 2          # 四国めたん (ノーマル)
 SPEAKER_NAME = "四国めたん"
 
+# 放送の読み上げらしくするための調整。
+#   速さ    少し早口にする
+#   抑揚    そのままだと明るく弾むので、平らに寄せて落ち着かせる
+#   前後の間 クリップをつないで鳴らすので短くしておく
+SPEED_SCALE = 1.2
+INTONATION_SCALE = 0.78
+PITCH_SCALE = -0.02
+PRE_PHONEME = 0.02
+POST_PHONEME = 0.04
+
 LINES = {
     "mt_warn_lead": "緊急地震速報です。緊急地震速報です。"
                     "強い揺れが予想される地域をお伝えします。",
@@ -52,24 +62,28 @@ LINES = {
     "mt_warn_tail": "対象地域では、慌てずに、まず身の安全を確保してください。",
 }
 
+# テレビのテロップと同じで、都・府・県は付けずに読む (東京、神奈川、…)。
 PREFS = [
-    "北海道", "青森県", "岩手県", "宮城県", "秋田県", "山形県", "福島県",
-    "茨城県", "栃木県", "群馬県", "埼玉県", "千葉県", "東京都", "神奈川県",
-    "新潟県", "富山県", "石川県", "福井県", "山梨県", "長野県", "岐阜県",
-    "静岡県", "愛知県", "三重県", "滋賀県", "京都府", "大阪府", "兵庫県",
-    "奈良県", "和歌山県", "鳥取県", "島根県", "岡山県", "広島県", "山口県",
-    "徳島県", "香川県", "愛媛県", "高知県", "福岡県", "佐賀県", "長崎県",
-    "熊本県", "大分県", "宮崎県", "鹿児島県", "沖縄県",
+    "北海道", "青森", "岩手", "宮城", "秋田", "山形", "福島",
+    "茨城", "栃木", "群馬", "埼玉", "千葉", "東京", "神奈川",
+    "新潟", "富山", "石川", "福井", "山梨", "長野", "岐阜",
+    "静岡", "愛知", "三重", "滋賀", "京都", "大阪", "兵庫",
+    "奈良", "和歌山", "鳥取", "島根", "岡山", "広島", "山口",
+    "徳島", "香川", "愛媛", "高知", "福岡", "佐賀", "長崎",
+    "熊本", "大分", "宮崎", "鹿児島", "沖縄",
 ]
 
-# open_jtalk が取り違える読み。「、」を足して読点で切るより、読みを直接書く。
+# open_jtalk が取り違える読み。読みを直接書いて渡す。
 YOMI = {
-    "茨城県": "いばらきけん",
-    "宮城県": "みやぎけん",
-    "神奈川県": "かながわけん",
-    "岐阜県": "ぎふけん",
-    "大分県": "おおいたけん",
-    "滋賀県": "しがけん",
+    "茨城": "いばらき",
+    "宮城": "みやぎ",
+    "神奈川": "かながわ",
+    "岐阜": "ぎふ",
+    "大分": "おおいた",
+    "滋賀": "しが",
+    "石川": "いしかわ",
+    "香川": "かがわ",
+    "山口": "やまぐち",
 }
 
 
@@ -95,6 +109,15 @@ def main() -> int:
                         open_jtalk_dict_dir=args.dict)
     core.load_model(args.speaker)
 
+    def synth(text: str) -> bytes:
+        q = core.audio_query(text, args.speaker)
+        q.speed_scale = SPEED_SCALE
+        q.intonation_scale = INTONATION_SCALE
+        q.pitch_scale = PITCH_SCALE
+        q.pre_phoneme_length = PRE_PHONEME
+        q.post_phoneme_length = POST_PHONEME
+        return core.synthesis(q, args.speaker)
+
     items = dict(LINES)
     for p in PREFS:
         items["mt_pref_" + p] = p
@@ -116,7 +139,7 @@ def main() -> int:
             dest = out_dir / name
             if not dest.exists():
                 wav = Path(tmp) / "a.wav"
-                wav.write_bytes(core.tts(say, args.speaker))
+                wav.write_bytes(synth(say))
                 # 前後の無音を落としてから小さめに詰める。単一 HTML に
                 # 埋め込むので、聞き取れる範囲でできるだけ軽くする。
                 subprocess.run(
@@ -125,7 +148,7 @@ def main() -> int:
                              ":start_silence=0.02,areverse,"
                              "silenceremove=start_periods=1:start_threshold=-45dB"
                              ":start_silence=0.04,areverse"),
-                     "-ac", "1", "-ar", "16000", "-b:a", "40k", str(dest)],
+                     "-ac", "1", "-ar", "24000", "-b:a", "72k", str(dest)],
                     check=True,
                 )
                 made += 1

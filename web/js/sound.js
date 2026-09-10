@@ -369,23 +369,26 @@
    *
    * 続報で地域が増えたときは、頭を「緊急地震速報の続報です。」に替えて
    * 増えた地域だけを読む。まだ前の読み上げが終わっていなければ鳴らさない
-   * (false を返すので、呼ぶ側は次の機会に回せる)。 */
-  Sound.prototype.warningVoiceBusy = function () {
+   * (false を返すので、呼ぶ側は次の機会に回せる)。
+   *
+   * 地域名はテロップと同じで都・府・県を付けずに読む (東京、神奈川、…)。 */
+  Sound.prototype.voiceBusy = function () {
     return !!(this.ctx && this._voiceEndsAt && this.ctx.currentTime < this._voiceEndsAt);
   };
 
   Sound.prototype.announceWarning = function (prefs, isUpdate) {
     this.unlock();
     if (!prefs || !prefs.length) return false;
-    if (this.warningVoiceBusy()) return false;
+    if (this.voiceBusy()) return false;
     var seq = [isUpdate ? 'mt_warn_update' : 'mt_warn_lead'];
     for (var i = 0; i < prefs.length && i < 12; i++) seq.push('mt_pref_' + prefs[i]);
     seq.push('mt_warn_tail');
-    if (!this.playSequence(seq, WARN_VOICE_GAP)) return false;
+    // 警報はチャイムの終わりを待たずに、発表と同時に読み始める
+    if (!this.playSequence(seq, WARN_VOICE_GAP, WARN_VOICE_PRIORITY, true)) return false;
     // 部品の読み込みは非同期なので、鳴り始めるまでのあいだも「鳴っている」
     // ことにしておく。1〜2 秒おきの続報で読み上げが潰し合わないように。
     this._voiceEndsAt = Math.max(this._voiceEndsAt || 0,
-                                 this.voiceStartTime() + 1.2 * seq.length);
+                                 this.ctx.currentTime + 1.0 * seq.length);
     return true;
   };
 
@@ -486,7 +489,8 @@
    */
 
   var VOICE_GAP = 0.08;
-  var WARN_VOICE_GAP = 0.16;   // 警報の地域名は少し間をあけて読む            // 部品と部品のあいだ [s]
+  var WARN_VOICE_GAP = 0.16;   // 警報の地域名は少し間をあけて読む
+  var WARN_VOICE_PRIORITY = 2; // 警報の読み上げは途中で潰されない            // 部品と部品のあいだ [s]
   var VOICE_PAUSE = 0.28;          // 原稿の句点 (PAUSE) のところで置く間 [s]
   var PAUSE = '。';                 // 部品の列に混ぜると、そこで一拍おく
   var VOICE_AFTER_EFFECT = 0.25;   // 効果音が終わってから読み始めるまで [s]
@@ -581,8 +585,15 @@
   }
 
   /* クリップの列を順につないで再生する (欠けている部品があれば使わない) */
-  Sound.prototype.playSequence = function (keys, gap) {
+  /* クリップの列を順につないで再生する (欠けている部品があれば使わない)
+   *
+   * priority は読み上げの優先度。緊急地震速報の読み上げの途中で「揺れを
+   * 検出」や地震情報が割り込むと、予約したぶんが丸ごと消えてしまうので、
+   * 低い優先度の読み上げは鳴っているあいだ断る。 */
+  Sound.prototype.playSequence = function (keys, gap, priority, atOnce) {
     if (!this.ctx || !this.enabled || !this.speechEnabled || !this.voiceClips) return false;
+    var prio = priority || 0;
+    if (prio < (this._voicePriority || 0) && this.voiceBusy()) return false;
     var self = this;
     var wanted = keys.filter(Boolean);
     for (var i = 0; i < wanted.length; i++) {
@@ -594,6 +605,7 @@
     }
 
     this.stopVoice();
+    this._voicePriority = prio;
     if (!this.voiceOut) {
       // 読み上げは残響を通さずに出す (言葉がにじまないように)
       this.voiceOut = this.ctx.createGain();
@@ -608,7 +620,8 @@
       if (buffers.some(function (b) { return !b; })) return;
       var rate = self.voiceRate || 1;
       var space = gap == null ? VOICE_GAP : gap;
-      var at = self.voiceStartTime();
+      // atOnce のときは効果音の終わりを待たずにすぐ喋り出す
+      var at = atOnce ? self.ctx.currentTime + 0.05 : self.voiceStartTime();
       self._voiceNodes = [];
       // 部品は重ねずに、わずかな間をおいて並べる。重ねて混ぜると
       // 語尾が削れて聞き取りにくくなる。
@@ -762,6 +775,8 @@
   Sound.prototype.speak = function (text, rate) {
     if (!this.enabled || !this.speechEnabled || !global.speechSynthesis) return;
     if (!text || text === this._lastSpoken) return;
+    // 警報の読み上げが鳴っているあいだは、代用の合成音声も重ねない
+    if ((this._voicePriority || 0) >= WARN_VOICE_PRIORITY && this.voiceBusy()) return;
     this._lastSpoken = text;
     var u = new global.SpeechSynthesisUtterance(text);
     u.lang = 'ja-JP';

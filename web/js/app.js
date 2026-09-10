@@ -777,6 +777,8 @@
 
   App.announceDetected = function (live) {
     if (!this.view.subCentroids || !this.subNames) return;
+    // メディアモードは放送の音だけにする (「揺れを検出」は読まない)
+    if (this.mode === 'media') return;
     var seen = this.saidAreas || (this.saidAreas = []);
     var said = this.saidPoints || (this.saidPoints = []);
     var best = -1, bv = DETECT_SAY_MIN;
@@ -1411,7 +1413,9 @@
       if (said.indexOf(prefs[i].name) < 0) fresh.push(prefs[i].name);
     }
     if (!fresh.length) return;
-    if (!this.sound.announceWarning(fresh, said.length > 0)) return;
+    // 読み上げは都・府・県を付けない短い呼び方 (東京、神奈川、…)
+    var short = fresh.map(shortPref);
+    if (!this.sound.announceWarning(short, said.length > 0)) return;
     for (i = 0; i < fresh.length && i < 12; i++) said.push(fresh[i]);
   };
 
