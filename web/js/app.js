@@ -1046,8 +1046,13 @@
         this.followDetection(boxes);
       }
 
-      v.drawEpicenter(cur.source.lat, cur.source.lon,
-                      this.phase !== 'final' && this.t < 30 ? (this.t % 2) / 2 : 0);
+      /* 震源の ✕ は緊急地震速報を出してから。それまでは震源が分かって
+         いないので置かない。地震情報で確定したら赤くする。 */
+      if (this.firedReports > 0 || this.phase === 'final') {
+        v.drawEpicenter(cur.source.lat, cur.source.lon,
+                        this.phase !== 'final' && this.t < 30 ? (this.t % 2) / 2 : 0,
+                        this.phase === 'final');
+      }
 
       el('tl-elapsed').textContent = U.formatElapsed(this.t);
       if (this.panelOn.wave && this.phase !== 'final') this.drawWaveStrip(k);

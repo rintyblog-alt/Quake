@@ -698,7 +698,11 @@
   };
 
   /* ---------------- 震源 ---------------- */
-  MapView.prototype.drawEpicenter = function (lat, lon, pulse) {
+  /* 震源の ✕ 印。
+   *
+   * final を渡すと赤い ✕ になる。緊急地震速報のあいだは推定した震源なので
+   * 白、地震情報で震源が確定したら赤、と見分けられるようにする。 */
+  MapView.prototype.drawEpicenter = function (lat, lon, pulse, final) {
     var ctx = this.ctx, p = this.proj;
     var c = p.project(lat, lon);
     var s = 21;
@@ -725,16 +729,16 @@
       ctx.restore();
     }
 
-    // 赤い縁取りの白い ✕
+    // 縁取り付きの ✕。確定した震源は赤、推定のあいだは白。
     ctx.save();
     ctx.lineCap = 'round';
     ctx.beginPath();
     ctx.moveTo(c[0] - s, c[1] - s); ctx.lineTo(c[0] + s, c[1] + s);
     ctx.moveTo(c[0] + s, c[1] - s); ctx.lineTo(c[0] - s, c[1] + s);
-    ctx.strokeStyle = 'rgba(60, 0, 30, 0.85)';
+    ctx.strokeStyle = final ? 'rgba(255, 255, 255, 0.92)' : 'rgba(60, 0, 30, 0.85)';
     ctx.lineWidth = 13;
     ctx.stroke();
-    ctx.strokeStyle = '#ffffff';
+    ctx.strokeStyle = final ? '#e01b2e' : '#ffffff';
     ctx.lineWidth = 8;
     ctx.stroke();
     ctx.restore();
