@@ -1283,12 +1283,8 @@
   App.showMediaEEW = function (report) {
     if (this.mode !== 'media' || !report) return;
     el('media-eew').classList.remove('hidden');
-    var d = new Date(this.current.originDate.getTime());
-    var h = d.getHours();
-    el('me-time').textContent = (h < 12 ? '午前' : '午後') +
-      ((h % 12) || 12) + '時' + d.getMinutes() + '分';
     el('me-head').textContent = report.region + 'で地震';
-    el('me-warn').textContent = report.kind === '警報' ? '強い揺れ警戒' : '揺れに注意';
+    el('me-warn').textContent = '強い揺れに警戒';
     this.updateMediaEEW();
   };
 

@@ -162,10 +162,13 @@ def main() -> int:
 
     html = (WEB / "index.html").read_text(encoding="utf-8")
 
-    # CSS を差し込む
-    css = (WEB / "css" / "style.css").read_text(encoding="utf-8")
-    html = html.replace('<link rel="stylesheet" href="css/style.css">',
-                        "<style>\n" + css + "\n</style>")
+    # CSS を差し込む（テロップの書体も中に持たせる）
+    for name in ("telop-font.css", "style.css"):
+        css = (WEB / "css" / name).read_text(encoding="utf-8")
+        tag = '<link rel="stylesheet" href="css/%s">' % name
+        if tag not in html:
+            raise SystemExit("index.html に %s の読み込みがありません" % name)
+        html = html.replace(tag, "<style>\n" + css + "\n</style>")
 
     # データを埋め込む
     bundle: dict[str, object] = {}
